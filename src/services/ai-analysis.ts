@@ -234,7 +234,7 @@ async function callGemini(prompt: string): Promise<GeminiVerification> {
 
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: "POST",
         headers: {
@@ -248,7 +248,7 @@ async function callGemini(prompt: string): Promise<GeminiVerification> {
           ],
           generationConfig: {
             temperature: 0.2,
-            maxOutputTokens: 500,
+            maxOutputTokens: 2000, // Increased for Gemini 3's internal thinking tokens
             responseMimeType: "application/json",
           },
         }),
