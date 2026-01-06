@@ -4,7 +4,6 @@
  */
 
 import { API_URLS } from "@/config/constants";
-import { LEAGUE_LIST } from "@/config/leagues";
 import { nowGMT1 } from "@/lib/date";
 import type { MarketSentiment, Market, MarketOutcome } from "@/types";
 import type { MarketType } from "@/config/markets";
@@ -21,25 +20,154 @@ interface PolymarketEvent {
 interface PolymarketMarket {
   id: string;
   question: string;
-  outcomes: string[];
-  outcomePrices: string[];
+  outcomes: string;  // JSON string like "[\"Yes\", \"No\"]"
+  outcomePrices: string;  // JSON string like "[\"0.705\", \"0.295\"]"
   volume: string;
-  tokens: Array<{
-    token_id: string;
-    outcome: string;
-  }>;
+  clobTokenIds?: string;  // JSON string with token IDs
+  sportsMarketType?: string;
 }
 
 interface CloBPrice {
   price: string;
 }
 
+// League slug prefixes for Polymarket events
+const LEAGUE_SLUG_PREFIX: Record<string, string> = {
+  PL: "epl",
+  PD: "laliga",
+  BL1: "bundesliga",
+  SA: "serie-a",
+  FL1: "ligue-1",
+};
+
+// Team name abbreviations for Polymarket slugs
+const TEAM_ABBREVIATIONS: Record<string, string> = {
+  // Premier League
+  "Arsenal FC": "ars",
+  "Arsenal": "ars",
+  "Liverpool FC": "liv",
+  "Liverpool": "liv",
+  "Manchester City FC": "mac",
+  "Manchester City": "mac",
+  "Man City": "mac",
+  "Brighton & Hove Albion FC": "bri",
+  "Brighton": "bri",
+  "Chelsea FC": "che",
+  "Chelsea": "che",
+  "Manchester United FC": "mau",
+  "Manchester United": "mau",
+  "Man United": "mau",
+  "Tottenham Hotspur FC": "tot",
+  "Tottenham": "tot",
+  "Spurs": "tot",
+  "Newcastle United FC": "new",
+  "Newcastle": "new",
+  "Aston Villa FC": "avl",
+  "Aston Villa": "avl",
+  "West Ham United FC": "whu",
+  "West Ham": "whu",
+  "Nottingham Forest FC": "nfo",
+  "Nottingham Forest": "nfo",
+  "Fulham FC": "ful",
+  "Fulham": "ful",
+  "Bournemouth": "bou",
+  "AFC Bournemouth": "bou",
+  "Crystal Palace FC": "cry",
+  "Crystal Palace": "cry",
+  "Brentford FC": "bre",
+  "Brentford": "bre",
+  "Everton FC": "eve",
+  "Everton": "eve",
+  "Wolverhampton Wanderers FC": "wol",
+  "Wolves": "wol",
+  "Leicester City FC": "lei",
+  "Leicester": "lei",
+  "Ipswich Town FC": "ips",
+  "Ipswich": "ips",
+  "Southampton FC": "sou",
+  "Southampton": "sou",
+  // La Liga
+  "Real Madrid CF": "rma",
+  "Real Madrid": "rma",
+  "FC Barcelona": "bar",
+  "Barcelona": "bar",
+  "Atletico Madrid": "atm",
+  "Atlético de Madrid": "atm",
+  // Bundesliga
+  "FC Bayern München": "bay",
+  "Bayern Munich": "bay",
+  "Borussia Dortmund": "dor",
+  "RB Leipzig": "rbl",
+  "Bayer 04 Leverkusen": "lev",
+  "Leverkusen": "lev",
+  // Serie A
+  "Juventus FC": "juv",
+  "Juventus": "juv",
+  "Inter Milan": "int",
+  "FC Internazionale Milano": "int",
+  "AC Milan": "acm",
+  "SSC Napoli": "nap",
+  "Napoli": "nap",
+  "AS Roma": "rom",
+  "Roma": "rom",
+  // Ligue 1
+  "Paris Saint-Germain FC": "psg",
+  "Paris Saint-Germain": "psg",
+  "PSG": "psg",
+  "AS Monaco FC": "mon",
+  "Monaco": "mon",
+  "Olympique de Marseille": "mar",
+  "Marseille": "mar",
+  "Olympique Lyonnais": "lyo",
+  "Lyon": "lyo",
+};
+
 /**
- * Fetch events from Polymarket Gamma API for a specific league
+ * Get team abbreviation for Polymarket slug
  */
-async function fetchSportsEvents(polymarketLeagueId: number): Promise<PolymarketEvent[]> {
+function getTeamAbbrev(teamName: string): string {
+  // Check exact match first
+  if (TEAM_ABBREVIATIONS[teamName]) {
+    return TEAM_ABBREVIATIONS[teamName];
+  }
+
+  // Try partial match
+  const lowerName = teamName.toLowerCase();
+  for (const [key, abbrev] of Object.entries(TEAM_ABBREVIATIONS)) {
+    if (lowerName.includes(key.toLowerCase()) || key.toLowerCase().includes(lowerName)) {
+      return abbrev;
+    }
+  }
+
+  // Fallback: first 3 chars of first word
+  return teamName.split(/\s+/)[0].slice(0, 3).toLowerCase();
+}
+
+/**
+ * Construct Polymarket event slug for a fixture
+ */
+function constructEventSlug(
+  leagueCode: string,
+  homeTeam: string,
+  awayTeam: string,
+  kickoffDate: string
+): string {
+  const prefix = LEAGUE_SLUG_PREFIX[leagueCode] || leagueCode.toLowerCase();
+  const homeAbbrev = getTeamAbbrev(homeTeam);
+  const awayAbbrev = getTeamAbbrev(awayTeam);
+  // Extract date from ISO string (e.g., "2026-01-07T20:00:00+01:00" -> "2026-01-07")
+  const date = kickoffDate.split("T")[0];
+
+  return `${prefix}-${homeAbbrev}-${awayAbbrev}-${date}`;
+}
+
+/**
+ * Fetch event by slug from Polymarket Gamma API
+ */
+async function fetchEventBySlug(slug: string): Promise<PolymarketEvent | null> {
   try {
-    const url = `${API_URLS.POLYMARKET_GAMMA}/events?active=true&closed=false&series_id=${polymarketLeagueId}&limit=50`;
+    const url = `${API_URLS.POLYMARKET_GAMMA}/events?slug=${slug}`;
+    console.log(`[Polymarket] Fetching: ${url}`);
 
     const response = await fetch(url, {
       next: { revalidate: 0 },
@@ -47,13 +175,14 @@ async function fetchSportsEvents(polymarketLeagueId: number): Promise<Polymarket
 
     if (!response.ok) {
       console.error(`Polymarket API error: ${response.status}`);
-      return [];
+      return null;
     }
 
-    return response.json();
+    const events: PolymarketEvent[] = await response.json();
+    return events.length > 0 ? events[0] : null;
   } catch (error) {
-    console.error("Failed to fetch Polymarket events:", error);
-    return [];
+    console.error(`Failed to fetch Polymarket event ${slug}:`, error);
+    return null;
   }
 }
 
@@ -81,42 +210,20 @@ async function fetchTokenPrice(tokenId: string): Promise<number | null> {
 }
 
 /**
- * Normalize team name for fuzzy matching
+ * Determine market type from question text or sportsMarketType
  */
-function normalizeTeamName(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/fc|cf|sc|ac|as|ss|rb|1\./gi, "")
-    .replace(/[^a-z]/g, "")
-    .trim();
-}
+function inferMarketType(question: string, sportsMarketType?: string): MarketType | null {
+  // Use sportsMarketType if available (more reliable)
+  if (sportsMarketType === "moneyline") {
+    return "MATCH_RESULT";
+  }
 
-/**
- * Check if event title matches fixture teams
- */
-function eventMatchesFixture(
-  eventTitle: string,
-  homeTeam: string,
-  awayTeam: string
-): boolean {
-  const normalizedTitle = normalizeTeamName(eventTitle);
-  const normalizedHome = normalizeTeamName(homeTeam);
-  const normalizedAway = normalizeTeamName(awayTeam);
-
-  // Check if both team names appear in the event title
-  return (
-    normalizedTitle.includes(normalizedHome) &&
-    normalizedTitle.includes(normalizedAway)
-  );
-}
-
-/**
- * Determine market type from question text
- */
-function inferMarketType(question: string): MarketType | null {
   const q = question.toLowerCase();
 
-  if (q.includes("who will win") || q.includes("match result") || q.includes("winner")) {
+  if (q.includes("will") && q.includes("win")) {
+    return "MATCH_RESULT";
+  }
+  if (q.includes("draw")) {
     return "MATCH_RESULT";
   }
   if (q.includes("over 2.5") || q.includes("more than 2.5")) {
@@ -132,27 +239,35 @@ function inferMarketType(question: string): MarketType | null {
 /**
  * Map Polymarket market to our Market type
  */
-async function mapPolymarketMarket(
-  pmMarket: PolymarketMarket
-): Promise<Market | null> {
-  const marketType = inferMarketType(pmMarket.question);
+function mapPolymarketMarket(pmMarket: PolymarketMarket): Market | null {
+  const marketType = inferMarketType(pmMarket.question, pmMarket.sportsMarketType);
   if (!marketType) return null;
 
-  // Parse outcome prices from the API response
+  // Parse JSON strings for outcomes and prices
+  let outcomeNames: string[];
+  let outcomePrices: string[];
+  let tokenIds: string[] = [];
+
+  try {
+    outcomeNames = JSON.parse(pmMarket.outcomes);
+    outcomePrices = JSON.parse(pmMarket.outcomePrices);
+    if (pmMarket.clobTokenIds) {
+      tokenIds = JSON.parse(pmMarket.clobTokenIds);
+    }
+  } catch {
+    console.error("Failed to parse market data:", pmMarket.question);
+    return null;
+  }
+
   const outcomes: MarketOutcome[] = [];
 
-  for (let i = 0; i < pmMarket.outcomes.length; i++) {
-    const outcomeName = pmMarket.outcomes[i];
-    const priceStr = pmMarket.outcomePrices[i];
-    const tokenId = pmMarket.tokens?.[i]?.token_id || "";
-
-    // Price is already a probability (0-1)
-    const probability = parseFloat(priceStr);
+  for (let i = 0; i < outcomeNames.length; i++) {
+    const probability = parseFloat(outcomePrices[i]) || 0;
 
     outcomes.push({
-      name: outcomeName,
-      probability: isNaN(probability) ? 0 : probability,
-      tokenId,
+      name: outcomeNames[i],
+      probability,
+      tokenId: tokenIds[i] || "",
     });
   }
 
@@ -165,36 +280,79 @@ async function mapPolymarketMarket(
 }
 
 /**
+ * Combine multiple moneyline markets into a single MATCH_RESULT market
+ * Polymarket has separate markets for "Home Win", "Draw", "Away Win"
+ */
+function combineMoneylineMarkets(markets: Market[], homeTeam: string, awayTeam: string): Market | null {
+  const moneylineMarkets = markets.filter(
+    (m) => m.type === "MATCH_RESULT" && m.outcomes.length === 2
+  );
+
+  if (moneylineMarkets.length < 2) return null;
+
+  const outcomes: MarketOutcome[] = [];
+  let totalVolume = 0;
+
+  for (const market of moneylineMarkets) {
+    const yesOutcome = market.outcomes.find((o) => o.name === "Yes");
+    if (!yesOutcome) continue;
+
+    totalVolume += market.volume;
+
+    // Determine outcome name from question
+    const q = market.question.toLowerCase();
+    let outcomeName = "Unknown";
+
+    if (q.includes("draw")) {
+      outcomeName = "Draw";
+    } else if (q.includes(homeTeam.toLowerCase()) || q.includes(getTeamAbbrev(homeTeam))) {
+      outcomeName = `${homeTeam} Win`;
+    } else if (q.includes(awayTeam.toLowerCase()) || q.includes(getTeamAbbrev(awayTeam))) {
+      outcomeName = `${awayTeam} Win`;
+    }
+
+    outcomes.push({
+      name: outcomeName,
+      probability: yesOutcome.probability,
+      tokenId: yesOutcome.tokenId,
+    });
+  }
+
+  if (outcomes.length < 2) return null;
+
+  return {
+    type: "MATCH_RESULT",
+    question: `Match Result: ${homeTeam} vs ${awayTeam}`,
+    volume: totalVolume,
+    outcomes: outcomes.sort((a, b) => b.probability - a.probability),
+  };
+}
+
+/**
  * Fetch market sentiment for a fixture
  */
 export async function fetchSentimentForFixture(
   fixtureId: number,
   homeTeam: string,
   awayTeam: string,
-  leagueCode: string
+  leagueCode: string,
+  kickoffDate?: string
 ): Promise<MarketSentiment> {
-  const league = LEAGUE_LIST.find((l) => l.code === leagueCode);
-
-  if (!league) {
-    return {
-      fixtureId,
-      polymarketEventId: null,
-      available: false,
-      fetchedAt: nowGMT1(),
-      markets: [],
-    };
-  }
-
   try {
-    // Fetch events for this league
-    const events = await fetchSportsEvents(league.polymarketId);
-
-    // Find matching event
-    const matchingEvent = events.find((event) =>
-      eventMatchesFixture(event.title, homeTeam, awayTeam)
+    // Construct the expected slug
+    const slug = constructEventSlug(
+      leagueCode,
+      homeTeam,
+      awayTeam,
+      kickoffDate || new Date().toISOString()
     );
+    console.log(`[Polymarket] Looking for event: ${slug}`);
 
-    if (!matchingEvent) {
+    // Fetch event by slug
+    const event = await fetchEventBySlug(slug);
+
+    if (!event) {
+      console.log(`[Polymarket] No event found for slug: ${slug}`);
       return {
         fixtureId,
         polymarketEventId: null,
@@ -204,19 +362,35 @@ export async function fetchSentimentForFixture(
       };
     }
 
-    // Map markets
-    const markets: Market[] = [];
+    console.log(`[Polymarket] Found event: ${event.title} with ${event.markets.length} markets`);
 
-    for (const pmMarket of matchingEvent.markets) {
-      const market = await mapPolymarketMarket(pmMarket);
+    // Map individual markets
+    const rawMarkets: Market[] = [];
+    for (const pmMarket of event.markets) {
+      const market = mapPolymarketMarket(pmMarket);
       if (market) {
+        rawMarkets.push(market);
+      }
+    }
+
+    // Combine moneyline markets into a single MATCH_RESULT
+    const combinedMatchResult = combineMoneylineMarkets(rawMarkets, homeTeam, awayTeam);
+
+    const markets: Market[] = [];
+    if (combinedMatchResult) {
+      markets.push(combinedMatchResult);
+    }
+
+    // Add any non-moneyline markets (BTTS, Over/Under, etc.)
+    for (const market of rawMarkets) {
+      if (market.type !== "MATCH_RESULT") {
         markets.push(market);
       }
     }
 
     return {
       fixtureId,
-      polymarketEventId: matchingEvent.id,
+      polymarketEventId: event.id,
       available: markets.length > 0,
       fetchedAt: nowGMT1(),
       markets,

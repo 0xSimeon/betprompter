@@ -75,7 +75,8 @@ export async function GET(request: NextRequest) {
         fixture.id,
         fixture.homeTeam.name,
         fixture.awayTeam.name,
-        fixture.leagueCode
+        fixture.leagueCode,
+        fixture.kickoff
       );
       sentimentMap.set(fixture.id, sentiment);
       await setSentiment(sentiment);

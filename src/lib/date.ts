@@ -141,3 +141,95 @@ export function addDays(dateStr: string, days: number): string {
   date.setDate(date.getDate() + days);
   return formatDateGMT1(date);
 }
+
+// ============================================
+// Week Date Utilities
+// ============================================
+
+/**
+ * Get the day of week (0 = Monday, 6 = Sunday) for a date in GMT+1
+ */
+function getDayOfWeekGMT1(date: Date): number {
+  const dayStr = date.toLocaleDateString("en-US", {
+    timeZone: TIMEZONE,
+    weekday: "short",
+  });
+  const dayMap: Record<string, number> = {
+    Mon: 0,
+    Tue: 1,
+    Wed: 2,
+    Thu: 3,
+    Fri: 4,
+    Sat: 5,
+    Sun: 6,
+  };
+  return dayMap[dayStr] ?? 0;
+}
+
+/**
+ * Get Monday-Sunday dates for the week containing the reference date
+ * @param referenceDate - YYYY-MM-DD format, defaults to today in GMT+1
+ * @returns Array of 7 date strings [Mon, Tue, Wed, Thu, Fri, Sat, Sun]
+ */
+export function getWeekDates(referenceDate?: string): string[] {
+  const refDate = referenceDate
+    ? new Date(referenceDate + "T12:00:00+01:00")
+    : new Date();
+
+  const refDateStr = formatDateGMT1(refDate);
+  const dayOfWeek = getDayOfWeekGMT1(refDate);
+
+  // Calculate Monday of this week
+  const mondayStr = addDays(refDateStr, -dayOfWeek);
+
+  // Generate Mon-Sun
+  const weekDates: string[] = [];
+  for (let i = 0; i < 7; i++) {
+    weekDates.push(addDays(mondayStr, i));
+  }
+
+  return weekDates;
+}
+
+/**
+ * Get current week's dates (Monday-Sunday) in GMT+1
+ */
+export function getCurrentWeekDates(): string[] {
+  return getWeekDates(getTodayGMT1());
+}
+
+/**
+ * Get upcoming week's dates (next Mon-Sun) for Sunday cron
+ * If called on Sunday, returns the week starting tomorrow (Monday)
+ */
+export function getUpcomingWeekDates(): string[] {
+  const today = getTodayGMT1();
+  const todayDate = new Date(today + "T12:00:00+01:00");
+  const dayOfWeek = getDayOfWeekGMT1(todayDate);
+
+  // Days until next Monday
+  const daysUntilMonday = dayOfWeek === 6 ? 1 : 7 - dayOfWeek;
+  const nextMonday = addDays(today, daysUntilMonday);
+
+  return getWeekDates(nextMonday);
+}
+
+/**
+ * Get a human-readable label for a date relative to today
+ * e.g., "Today", "Tomorrow", "Wed, 8 Jan"
+ */
+export function getDateLabel(dateStr: string): string {
+  const today = getTodayGMT1();
+  const tomorrow = addDays(today, 1);
+
+  if (dateStr === today) return "Today";
+  if (dateStr === tomorrow) return "Tomorrow";
+
+  const date = new Date(dateStr + "T12:00:00+01:00");
+  return date.toLocaleDateString("en-GB", {
+    timeZone: TIMEZONE,
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  });
+}

@@ -4,9 +4,12 @@ import {
   MatchHeader,
   PredictionCard,
   TheAngle,
-  SentimentPanel,
+  MarketSentimentDisplay,
   LineupsPanel,
+  AutoRefreshWrapper,
+  RefreshButton,
 } from "@/components/match";
+import { FixtureStatusBadge } from "@/components/shared";
 import { Card, CardContent } from "@/components/ui/card";
 import { DISCLAIMER } from "@/config/constants";
 
@@ -30,42 +33,69 @@ export default async function MatchPage({ params }: MatchPageProps) {
     notFound();
   }
 
+  const lineupsAvailable = match.lineups?.available ?? false;
+
   return (
     <div className="container mx-auto px-4 py-6 max-w-2xl">
-      <div className="space-y-6">
-        {/* Match Header */}
-        <MatchHeader fixture={match} />
+      <AutoRefreshWrapper
+        fixtureId={fixtureId}
+        kickoff={match.kickoff}
+        lineupsAvailable={lineupsAvailable}
+      >
+        <div className="space-y-6">
+          {/* Status and Refresh Row */}
+          <div className="flex items-center justify-between">
+            <FixtureStatusBadge
+              kickoff={match.kickoff}
+              lineupsAvailable={lineupsAvailable}
+              matchStatus={match.status}
+            />
+            <RefreshButton
+              fixtureId={fixtureId}
+              kickoff={match.kickoff}
+              lineupsAvailable={lineupsAvailable}
+            />
+          </div>
 
-        {/* Prediction Card */}
-        {match.prediction && <PredictionCard prediction={match.prediction} />}
+          {/* Match Header */}
+          <MatchHeader fixture={match} />
 
-        {/* The Angle */}
-        {match.prediction && (
-          <TheAngle
-            narrative={match.prediction.narrative}
-            keyFactors={match.prediction.keyFactors}
-          />
-        )}
+          {/* Prediction Card */}
+          {match.prediction && <PredictionCard prediction={match.prediction} />}
 
-        {/* Market Sentiment */}
-        {match.sentiment && <SentimentPanel sentiment={match.sentiment} />}
+          {/* The Angle */}
+          {match.prediction && (
+            <TheAngle
+              narrative={match.prediction.narrative}
+              keyFactors={match.prediction.keyFactors}
+            />
+          )}
 
-        {/* Lineups */}
-        {match.lineups && (
-          <LineupsPanel
-            lineups={match.lineups}
-            homeTeamName={match.homeTeam.shortName || match.homeTeam.name}
-            awayTeamName={match.awayTeam.shortName || match.awayTeam.name}
-          />
-        )}
+          {/* Market Sentiment */}
+          {match.sentiment && (
+            <MarketSentimentDisplay
+              sentiment={match.sentiment}
+              prediction={match.prediction}
+            />
+          )}
 
-        {/* Disclaimer Banner */}
-        <Card className="bg-amber-500/10 border-amber-500/20">
-          <CardContent className="py-3">
-            <p className="text-sm text-amber-400/90">{DISCLAIMER}</p>
-          </CardContent>
-        </Card>
-      </div>
+          {/* Lineups */}
+          {match.lineups && (
+            <LineupsPanel
+              lineups={match.lineups}
+              homeTeamName={match.homeTeam.shortName || match.homeTeam.name}
+              awayTeamName={match.awayTeam.shortName || match.awayTeam.name}
+            />
+          )}
+
+          {/* Disclaimer Banner */}
+          <Card className="bg-amber-500/10 border-amber-500/20">
+            <CardContent className="py-3">
+              <p className="text-sm text-amber-400/90">{DISCLAIMER}</p>
+            </CardContent>
+          </Card>
+        </div>
+      </AutoRefreshWrapper>
     </div>
   );
 }

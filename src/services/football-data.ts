@@ -123,15 +123,29 @@ async function fetchFromApi<T>(endpoint: string): Promise<T> {
 
 /**
  * Fetch fixtures for a specific date across all top 5 leagues
+ * Queries each competition separately as the combined endpoint has issues
  */
 export async function fetchFixturesByDate(date: string): Promise<Fixture[]> {
-  const competitionIds = LEAGUE_LIST.map((l) => l.footballDataId).join(",");
+  const allFixtures: Fixture[] = [];
 
-  const data = await fetchFromApi<{ matches: FootballDataMatch[] }>(
-    `/matches?competitions=${competitionIds}&dateFrom=${date}&dateTo=${date}`
+  // Query each competition separately (more reliable than combined endpoint)
+  for (const league of LEAGUE_LIST) {
+    try {
+      const data = await fetchFromApi<{ matches: FootballDataMatch[] }>(
+        `/competitions/${league.footballDataId}/matches?dateFrom=${date}&dateTo=${date}`
+      );
+      const fixtures = data.matches.map(mapMatch);
+      allFixtures.push(...fixtures);
+    } catch (error) {
+      console.error(`Failed to fetch ${league.code} fixtures for ${date}:`, error);
+      // Continue with other leagues
+    }
+  }
+
+  // Sort by kickoff time
+  return allFixtures.sort(
+    (a, b) => new Date(a.kickoff).getTime() - new Date(b.kickoff).getTime()
   );
-
-  return data.matches.map(mapMatch);
 }
 
 /**

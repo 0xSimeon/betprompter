@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
-import { LeagueBadge, CategoryBadge } from "@/components/shared";
+import { LeagueBadge, CategoryBadge, FixtureStatusBadge } from "@/components/shared";
 import { formatKickoffTime } from "@/lib/date";
 import type { FixtureWithPrediction } from "@/types";
 import { cn } from "@/lib/utils";
@@ -13,7 +13,7 @@ interface FixtureCardProps {
 }
 
 export function FixtureCard({ fixture, className }: FixtureCardProps) {
-  const { homeTeam, awayTeam, kickoff, leagueCode, prediction, sentiment, id } = fixture;
+  const { homeTeam, awayTeam, kickoff, leagueCode, prediction, sentiment, id, status, lineups } = fixture;
 
   // Get top outcome from sentiment if available
   const topOutcome = sentiment?.markets[0]?.outcomes.reduce((a, b) =>
@@ -30,12 +30,17 @@ export function FixtureCard({ fixture, className }: FixtureCardProps) {
       >
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0">
-            {/* League and Time */}
-            <div className="flex items-center gap-2 mb-2">
+            {/* League, Time, and Status */}
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
               <LeagueBadge leagueCode={leagueCode} />
               <span className="text-xs text-muted-foreground tabular-nums">
                 {formatKickoffTime(kickoff)}
               </span>
+              <FixtureStatusBadge
+                kickoff={kickoff}
+                lineupsAvailable={lineups?.available ?? false}
+                matchStatus={status}
+              />
             </div>
 
             {/* Teams */}

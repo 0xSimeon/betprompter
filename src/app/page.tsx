@@ -1,31 +1,41 @@
 import { FixturesPageClient } from "@/components/fixtures/fixtures-page-client";
-import { getTodayGMT1 } from "@/lib/date";
-import { getFixturesWithPredictions, getSelectedFixtures, getDailyFixtures } from "@/lib/kv";
+import { getTodayGMT1, getCurrentWeekDates, getDateLabel } from "@/lib/date";
+import { getFixturesWithPredictions, getDailyFixtures } from "@/lib/kv";
+import type { FixtureWithPrediction } from "@/types";
 
 export const dynamic = "force-dynamic";
 
+export interface FixturesByDate {
+  date: string;
+  label: string;
+  fixtures: FixtureWithPrediction[];
+  total: number;
+}
+
 export default async function HomePage() {
   const today = getTodayGMT1();
+  const weekDates = getCurrentWeekDates();
 
-  // Fetch fixtures from KV (will be empty until cron jobs populate data)
-  let fixtures = await getFixturesWithPredictions(today);
-  let total = 0;
+  // Fetch fixtures for each day of the week
+  const fixturesByDate: FixturesByDate[] = await Promise.all(
+    weekDates.map(async (date) => {
+      const fixtures = (await getFixturesWithPredictions(date)) || [];
+      const allFixtures = await getDailyFixtures(date);
+      const total = allFixtures?.length || 0;
 
-  const allFixtures = await getDailyFixtures(today);
-  if (allFixtures) {
-    total = allFixtures.length;
-  }
-
-  // If no data yet, use empty array (UI will show empty state)
-  if (!fixtures) {
-    fixtures = [];
-  }
+      return {
+        date,
+        label: getDateLabel(date),
+        fixtures,
+        total,
+      };
+    })
+  );
 
   return (
     <FixturesPageClient
-      initialDate={today}
-      initialFixtures={fixtures}
-      totalFixtures={total}
+      today={today}
+      fixturesByDate={fixturesByDate}
     />
   );
 }

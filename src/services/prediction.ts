@@ -7,10 +7,7 @@
 import {
   BANKER_PROBABILITY_THRESHOLD,
   VALUE_PROBABILITY_MIN,
-  VALUE_PROBABILITY_MAX,
-  DISCLAIMER,
 } from "@/config/constants";
-import { MARKETS, type MarketType } from "@/config/markets";
 import { nowGMT1 } from "@/lib/date";
 import type {
   Fixture,
@@ -47,7 +44,46 @@ function getMarketVolume(sentiment: MarketSentiment | null): number {
 }
 
 /**
- * Determine prediction category based on rules
+ * Check if AI lean direction aligns with market's top outcome
+ * Returns: 1 for aligned, 0 for neutral, -1 for conflicting
+ */
+function getAIMarketAlignment(
+  aiLean: string,
+  marketTopOutcome: { name: string; probability: number } | null
+): number {
+  if (!marketTopOutcome || aiLean === "NEUTRAL") return 0;
+
+  const marketDirection = marketTopOutcome.name.toLowerCase();
+  const aiDirection = aiLean.toLowerCase();
+
+  // Check alignment
+  if (
+    (aiDirection === "home" && marketDirection.includes("home")) ||
+    (aiDirection === "away" && marketDirection.includes("away")) ||
+    (aiDirection === "draw" && marketDirection.includes("draw"))
+  ) {
+    return 1; // Aligned
+  }
+
+  // Check conflict (AI says one thing, market says another strongly)
+  if (marketTopOutcome.probability >= 0.5) {
+    if (
+      (aiDirection === "home" && marketDirection.includes("away")) ||
+      (aiDirection === "away" && marketDirection.includes("home"))
+    ) {
+      return -1; // Conflicting
+    }
+  }
+
+  return 0; // Neutral/unclear
+}
+
+/**
+ * Determine prediction category based on AI + Market confluence
+ *
+ * BANKER: Strong agreement between AI and market (high confidence from both)
+ * VALUE: AI sees edge that market may be undervaluing
+ * NO_BET: Conflicting signals, low confidence, or insufficient data
  */
 function classifyPrediction(
   sentiment: MarketSentiment | null,
@@ -56,37 +92,75 @@ function classifyPrediction(
   const topOutcome = getTopOutcome(sentiment);
   const volume = getMarketVolume(sentiment);
   const hasMarketData = sentiment?.available && topOutcome;
+  const { groqAnalysis, geminiVerification } = analysis;
+  const aiConfidence = groqAnalysis.confidence;
+  const aiLean = groqAnalysis.lean;
+  const hasSuggestedOutcome = !!groqAnalysis.suggestedOutcome;
 
-  // BANKER requirements:
-  // - Polymarket probability >= 70%
-  // - Adequate volume (> $1000)
-  // - Gemini verification passed
-  // - AI confidence not LOW
+  // If AI says NEUTRAL or LOW confidence, don't bet regardless of market
+  if (aiLean === "NEUTRAL" || aiConfidence === "LOW") {
+    return "NO_BET";
+  }
+
+  // No market data - only bet if AI is very confident
+  if (!hasMarketData) {
+    if (aiConfidence === "HIGH" && hasSuggestedOutcome && geminiVerification.passed) {
+      return "VALUE"; // AI-only value play
+    }
+    return "NO_BET";
+  }
+
+  const alignment = getAIMarketAlignment(aiLean, topOutcome);
+
+  // Conflicting signals - AI and market disagree
+  if (alignment === -1 && topOutcome.probability >= 0.55) {
+    return "NO_BET";
+  }
+
+  // BANKER: Strong market signal (>=70%) + AI agrees or doesn't conflict
+  // Also need adequate volume and passed verification
+  // Note: aiConfidence is already known to be HIGH or MEDIUM at this point (LOW returns early)
   if (
-    hasMarketData &&
     topOutcome.probability >= BANKER_PROBABILITY_THRESHOLD &&
     volume >= 1000 &&
-    analysis.geminiVerification.passed &&
-    analysis.groqAnalysis.confidence !== "LOW"
+    alignment >= 0 && // Not conflicting
+    geminiVerification.passed
   ) {
     return "BANKER";
   }
 
-  // VALUE requirements:
-  // - Polymarket probability 40-60%
-  // - AI has a suggested outcome
-  // - AI confidence not LOW
+  // BANKER with lower threshold if AI strongly agrees
   if (
-    hasMarketData &&
+    topOutcome.probability >= 0.65 &&
+    volume >= 500 &&
+    alignment === 1 && // AI agrees with market
+    aiConfidence === "HIGH" &&
+    geminiVerification.passed
+  ) {
+    return "BANKER";
+  }
+
+  // VALUE: Market shows opportunity (40-69%) + AI has suggestion
+  // Note: aiConfidence is already known to be HIGH or MEDIUM at this point
+  if (
     topOutcome.probability >= VALUE_PROBABILITY_MIN &&
-    topOutcome.probability <= VALUE_PROBABILITY_MAX &&
-    analysis.groqAnalysis.suggestedOutcome &&
-    analysis.groqAnalysis.confidence !== "LOW"
+    topOutcome.probability < BANKER_PROBABILITY_THRESHOLD &&
+    hasSuggestedOutcome
   ) {
     return "VALUE";
   }
 
-  // NO_BET for everything else
+  // VALUE: AI sees value against the market (contrarian play)
+  // AI is confident in opposite direction but market isn't overwhelming
+  if (
+    alignment === -1 &&
+    topOutcome.probability < 0.55 && // Market not too confident
+    aiConfidence === "HIGH" &&
+    hasSuggestedOutcome
+  ) {
+    return "VALUE"; // Contrarian value play
+  }
+
   return "NO_BET";
 }
 
@@ -138,13 +212,11 @@ function buildPrimaryMarket(
  * Build alternative (safer) market selection
  */
 function buildAlternativeMarket(
-  sentiment: MarketSentiment | null,
-  analysis: AIAnalysis,
+  _sentiment: MarketSentiment | null,
+  _analysis: AIAnalysis,
   primaryMarket: MarketSelection | null
 ): MarketSelection | null {
   if (!primaryMarket || primaryMarket.type !== "MATCH_RESULT") return null;
-
-  const { groqAnalysis } = analysis;
 
   // Suggest double chance if primary is match result
   let alternativeSelection: string | null = null;

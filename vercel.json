@@ -2,8 +2,8 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "crons": [
     {
-      "path": "/api/cron/daily-fixtures",
-      "schedule": "0 4 * * *"
+      "path": "/api/cron/weekly-fixtures",
+      "schedule": "0 21 * * 0"
     },
     {
       "path": "/api/cron/settlement",
