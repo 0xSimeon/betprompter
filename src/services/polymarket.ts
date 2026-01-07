@@ -93,33 +93,163 @@ const TEAM_ABBREVIATIONS: Record<string, string> = {
   "Barcelona": "bar",
   "Atletico Madrid": "atm",
   "Atlético de Madrid": "atm",
+  "Sevilla FC": "sev",
+  "Sevilla": "sev",
+  "Real Sociedad de Fútbol": "rso",
+  "Real Sociedad": "rso",
+  "Real Betis Balompié": "bet",
+  "Real Betis": "bet",
+  "Betis": "bet",
+  "Villarreal CF": "vil",
+  "Villarreal": "vil",
+  "Athletic Club": "ath",
+  "Athletic Bilbao": "ath",
+  "Valencia CF": "val",
+  "Valencia": "val",
+  "CA Osasuna": "osa",
+  "Osasuna": "osa",
+  "RC Celta de Vigo": "cel",
+  "Celta Vigo": "cel",
+  "Celta": "cel",
+  "Getafe CF": "get",
+  "Getafe": "get",
+  "Girona FC": "gir",
+  "Girona": "gir",
+  "Rayo Vallecano de Madrid": "ray",
+  "Rayo Vallecano": "ray",
+  "RCD Mallorca": "mal",
+  "Mallorca": "mal",
+  "UD Las Palmas": "lpa",
+  "Las Palmas": "lpa",
+  "Deportivo Alavés": "ala",
+  "Alavés": "ala",
+  "RCD Espanyol de Barcelona": "esp",
+  "Espanyol": "esp",
+  "CD Leganés": "leg",
+  "Leganés": "leg",
+  "Real Valladolid CF": "vld",
+  "Valladolid": "vld",
   // Bundesliga
   "FC Bayern München": "bay",
   "Bayern Munich": "bay",
+  "Bayern": "bay",
   "Borussia Dortmund": "dor",
+  "Dortmund": "dor",
+  "BVB": "dor",
   "RB Leipzig": "rbl",
+  "Leipzig": "rbl",
   "Bayer 04 Leverkusen": "lev",
   "Leverkusen": "lev",
+  "VfL Wolfsburg": "wol",
+  "Wolfsburg": "wol",
+  "Eintracht Frankfurt": "fra",
+  "Frankfurt": "fra",
+  "VfB Stuttgart": "stu",
+  "Stuttgart": "stu",
+  "SC Freiburg": "fre",
+  "Freiburg": "fre",
+  "1. FC Union Berlin": "fcub",
+  "Union Berlin": "fcub",
+  "TSG 1899 Hoffenheim": "hof",
+  "Hoffenheim": "hof",
+  "1. FSV Mainz 05": "mai",
+  "Mainz": "mai",
+  "Borussia Mönchengladbach": "bmg",
+  "Gladbach": "bmg",
+  "SV Werder Bremen": "wer",
+  "Werder Bremen": "wer",
+  "FC Augsburg": "aug",
+  "Augsburg": "aug",
+  "VfL Bochum 1848": "boc",
+  "Bochum": "boc",
+  "1. FC Heidenheim 1846": "hei",
+  "Heidenheim": "hei",
+  "FC St. Pauli": "stp",
+  "St. Pauli": "stp",
+  "Holstein Kiel": "kie",
+  "Kiel": "kie",
   // Serie A
   "Juventus FC": "juv",
   "Juventus": "juv",
   "Inter Milan": "int",
   "FC Internazionale Milano": "int",
   "AC Milan": "acm",
+  "Milan": "acm",
   "SSC Napoli": "nap",
   "Napoli": "nap",
   "AS Roma": "rom",
   "Roma": "rom",
+  "SS Lazio": "laz",
+  "Lazio": "laz",
+  "Atalanta BC": "ata",
+  "Atalanta": "ata",
+  "ACF Fiorentina": "fio",
+  "Fiorentina": "fio",
+  "Bologna FC 1909": "bol",
+  "Bologna": "bol",
+  "Torino FC": "tor",
+  "Torino": "tor",
+  "Udinese Calcio": "udi",
+  "Udinese": "udi",
+  "Genoa CFC": "gen",
+  "Genoa": "gen",
+  "Cagliari Calcio": "cag",
+  "Cagliari": "cag",
+  "Parma Calcio 1913": "par",
+  "Parma": "par",
+  "Empoli FC": "emp",
+  "Empoli": "emp",
+  "US Lecce": "lec",
+  "Lecce": "lec",
+  "Como 1907": "com",
+  "Como": "com",
+  "Hellas Verona FC": "ver",
+  "Verona": "ver",
+  "Venezia FC": "ven",
+  "Venezia": "ven",
+  "AC Monza": "mza",
+  "Monza": "mza",
+  "US Sassuolo Calcio": "sas",
+  "Sassuolo": "sas",
   // Ligue 1
   "Paris Saint-Germain FC": "psg",
   "Paris Saint-Germain": "psg",
   "PSG": "psg",
-  "AS Monaco FC": "mon",
-  "Monaco": "mon",
+  "AS Monaco FC": "asm",
+  "Monaco": "asm",
   "Olympique de Marseille": "mar",
   "Marseille": "mar",
   "Olympique Lyonnais": "lyo",
   "Lyon": "lyo",
+  "LOSC Lille": "lil",
+  "Lille OSC": "lil",
+  "Lille": "lil",
+  "OGC Nice": "nic",
+  "Nice": "nic",
+  "RC Lens": "len",
+  "Lens": "len",
+  "Stade Rennais FC 1901": "ren",
+  "Rennes": "ren",
+  "Stade Brestois 29": "bre",
+  "Brest": "bre",
+  "RC Strasbourg Alsace": "str",
+  "Strasbourg": "str",
+  "Toulouse FC": "tou",
+  "Toulouse": "tou",
+  "FC Nantes": "nan",
+  "Nantes": "nan",
+  "AJ Auxerre": "aux",
+  "Auxerre": "aux",
+  "Angers SCO": "ang",
+  "Angers": "ang",
+  "Stade de Reims": "rei",
+  "Reims": "rei",
+  "Le Havre AC": "leh",
+  "Le Havre": "leh",
+  "AS Saint-Étienne": "ste",
+  "Saint-Étienne": "ste",
+  "Montpellier HSC": "mpl",
+  "Montpellier": "mpl",
 };
 
 /**
@@ -217,20 +347,44 @@ function inferMarketType(question: string, sportsMarketType?: string): MarketTyp
   if (sportsMarketType === "moneyline") {
     return "MATCH_RESULT";
   }
+  if (sportsMarketType === "totals") {
+    const q = question.toLowerCase();
+    if (q.includes("2.5")) return "OVER_2_5";
+    if (q.includes("1.5")) return "OVER_1_5";
+  }
+  if (sportsMarketType === "btts") {
+    return "BTTS";
+  }
 
   const q = question.toLowerCase();
 
+  // Match result detection
   if (q.includes("will") && q.includes("win")) {
     return "MATCH_RESULT";
   }
   if (q.includes("draw")) {
     return "MATCH_RESULT";
   }
-  if (q.includes("over 2.5") || q.includes("more than 2.5")) {
+
+  // Goals markets
+  if (q.includes("over 2.5") || q.includes("more than 2.5") || q.includes("2.5+ goals") || q.includes("3 or more")) {
     return "OVER_2_5";
   }
-  if (q.includes("over 1.5") || q.includes("more than 1.5")) {
+  if (q.includes("over 1.5") || q.includes("more than 1.5") || q.includes("1.5+ goals") || q.includes("2 or more")) {
     return "OVER_1_5";
+  }
+
+  // BTTS detection
+  if (q.includes("both teams") && q.includes("score")) {
+    return "BTTS";
+  }
+  if (q.includes("btts")) {
+    return "BTTS";
+  }
+
+  // Double Chance - less common on Polymarket but check anyway
+  if (q.includes("double chance") || q.includes("not lose")) {
+    return "DOUBLE_CHANCE";
   }
 
   return null;

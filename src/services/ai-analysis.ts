@@ -83,27 +83,52 @@ Away formation: ${lineups.away?.formation || "Unknown"}
 
   prompt += `
 TASK:
-Provide a concise analysis with:
-1. A 2-3 sentence narrative explaining the key angle for this match
-2. 3-5 key factors that could influence the outcome
-3. Your lean (HOME, DRAW, AWAY, or NEUTRAL if no clear edge)
-4. Confidence level (HIGH, MEDIUM, LOW)
-5. Suggested market (MATCH_RESULT, DOUBLE_CHANCE, OVER_1_5, OVER_2_5, or null if no bet)
-6. Suggested outcome for that market (e.g., "Home Win", "1X", "Over 2.5")
-7. Any concerns or caveats
+You are an expert football analyst. Provide a betting analysis with PROBABILITY ESTIMATES.
 
-Respond in this exact JSON format:
+USE YOUR KNOWLEDGE:
+- Team strengths, recent form (last 5 matches), playing styles
+- Managerial changes, key injuries, suspensions
+- Home/away performance patterns, head-to-head records
+- Tactical matchups, motivation (title race, relegation battle, cup focus)
+
+COMPARE WITH POLYMARKET (if available):
+- If your probability differs from market by >10%, that's a potential VALUE bet
+- High volume markets (>$10k) are more reliable signals
+- Note if you agree or disagree with market sentiment
+
+OUTPUT REQUIREMENTS:
+1. Narrative: 2-3 sentences explaining your KEY ANGLE
+2. Key Factors: 3-5 SPECIFIC factors (actual stats, news, not generic)
+3. Lean: HOME, DRAW, or AWAY
+4. Confidence: HIGH (>70% certain), MEDIUM (55-70%), LOW (<55%)
+5. Suggested Market & Outcome
+6. Concerns: Specific risks
+7. PROBABILITIES: Your estimated probability for EACH outcome (must sum correctly)
+
+Respond in this EXACT JSON format:
 {
   "narrative": "string",
   "keyFactors": ["string", "string", ...],
-  "lean": "HOME" | "DRAW" | "AWAY" | "NEUTRAL",
+  "lean": "HOME" | "DRAW" | "AWAY",
   "confidence": "HIGH" | "MEDIUM" | "LOW",
-  "suggestedMarket": "MATCH_RESULT" | "DOUBLE_CHANCE" | "OVER_1_5" | "OVER_2_5" | null,
-  "suggestedOutcome": "string" | null,
-  "concerns": ["string", ...]
+  "suggestedMarket": "MATCH_RESULT" | "DOUBLE_CHANCE" | "OVER_1_5" | "OVER_2_5" | "BTTS",
+  "suggestedOutcome": "string",
+  "concerns": ["string", ...],
+  "probabilities": {
+    "homeWin": 0.xx,
+    "draw": 0.xx,
+    "awayWin": 0.xx,
+    "over15": 0.xx,
+    "over25": 0.xx,
+    "btts": 0.xx
+  }
 }
 
-Be conservative and honest. Express uncertainty when warranted. Do not overstate edges.`;
+PROBABILITY GUIDELINES:
+- homeWin + draw + awayWin should equal ~1.0
+- Strong favorites at home: 55-75% win probability
+- Evenly matched: 30-40% each for home/away, 25-30% draw
+- Be realistic - even dominant teams rarely exceed 80%`;
 
   return prompt;
 }
@@ -151,13 +176,13 @@ Be critical. Flag anything that seems overconfident or poorly reasoned.`;
  */
 async function callGroq(prompt: string): Promise<GroqAnalysis> {
   const defaultAnalysis: GroqAnalysis = {
-    narrative: "Unable to generate analysis.",
-    keyFactors: [],
-    lean: "NEUTRAL",
+    narrative: "Unable to generate detailed analysis due to limited data.",
+    keyFactors: ["Insufficient data for comprehensive analysis"],
+    lean: "HOME",
     confidence: "LOW",
-    suggestedMarket: null,
-    suggestedOutcome: null,
-    concerns: ["AI analysis unavailable"],
+    suggestedMarket: "MATCH_RESULT",
+    suggestedOutcome: "Home Win",
+    concerns: ["AI analysis unavailable - defaulting to home advantage"],
   };
 
   if (!GROQ_API_KEY) {
@@ -177,7 +202,7 @@ async function callGroq(prompt: string): Promise<GroqAnalysis> {
         messages: [
           {
             role: "system",
-            content: "You are a football betting analyst. Provide structured, honest analysis. Always respond with valid JSON.",
+            content: "You are an expert football betting analyst with encyclopedic knowledge of European football - Premier League, La Liga, Bundesliga, Serie A, Ligue 1. You know team form, playing styles, managers, key players, injuries, and head-to-head records. When Polymarket data is provided, factor it into your analysis. You MUST always suggest a specific bet. Respond with valid JSON only.",
           },
           { role: "user", content: prompt },
         ],
@@ -209,6 +234,7 @@ async function callGroq(prompt: string): Promise<GroqAnalysis> {
       suggestedMarket: parsed.suggestedMarket as MarketType | null,
       suggestedOutcome: parsed.suggestedOutcome || null,
       concerns: parsed.concerns || [],
+      probabilities: parsed.probabilities || undefined,
     };
   } catch (error) {
     console.error("Groq API call failed:", error);

@@ -7,14 +7,14 @@ import type { FixtureWithPrediction } from "@/types";
 
 interface FixtureListProps {
   fixtures: FixtureWithPrediction[];
-  selectedLeagues: string[];
+  selectedLeague: string | null;
 }
 
-export function FixtureList({ fixtures, selectedLeagues }: FixtureListProps) {
-  // Filter by selected leagues
-  const filteredFixtures = fixtures.filter((f) =>
-    selectedLeagues.includes(f.leagueCode)
-  );
+export function FixtureList({ fixtures, selectedLeague }: FixtureListProps) {
+  // Filter by selected league (null = show all)
+  const filteredFixtures = selectedLeague
+    ? fixtures.filter((f) => f.leagueCode === selectedLeague)
+    : fixtures;
 
   if (filteredFixtures.length === 0) {
     return (
@@ -55,7 +55,7 @@ export function FixtureList({ fixtures, selectedLeagues }: FixtureListProps) {
             <h2 className="text-sm font-medium text-muted-foreground mb-3">
               {league?.name || leagueCode}
             </h2>
-            <div className="space-y-2">
+            <div className="space-y-4">
               {leagueFixtures.map((fixture) => (
                 <FixtureCard key={fixture.id} fixture={fixture} />
               ))}

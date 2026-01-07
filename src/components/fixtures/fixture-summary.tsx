@@ -10,7 +10,7 @@ interface FixtureSummaryProps {
 export function FixtureSummary({ fixtures, totalFixtures }: FixtureSummaryProps) {
   const bankers = fixtures.filter((f) => f.prediction?.category === "BANKER").length;
   const value = fixtures.filter((f) => f.prediction?.category === "VALUE").length;
-  const noBet = fixtures.filter((f) => f.prediction?.category === "NO_BET").length;
+  const risky = fixtures.filter((f) => f.prediction?.category === "RISKY").length;
 
   return (
     <div className="text-center text-sm text-muted-foreground">
@@ -28,9 +28,9 @@ export function FixtureSummary({ fixtures, totalFixtures }: FixtureSummaryProps)
       {value > 0 && (
         <span className="text-amber-400">{value} Value</span>
       )}
-      {(bankers > 0 || value > 0) && noBet > 0 && <span className="mx-1">·</span>}
-      {noBet > 0 && (
-        <span className="text-zinc-400">{noBet} No Bet</span>
+      {(bankers > 0 || value > 0) && risky > 0 && <span className="mx-1">·</span>}
+      {risky > 0 && (
+        <span className="text-red-400">{risky} Risky</span>
       )}
     </div>
   );

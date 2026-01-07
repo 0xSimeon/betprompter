@@ -4,11 +4,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { OutcomeBars } from "@/components/shared";
 import { getRelativeTime } from "@/lib/date";
-import { TrendingUp, TrendingDown, Minus, AlertTriangle } from "lucide-react";
+import { TrendingUp, TrendingDown, Minus, AlertTriangle, Activity, DollarSign, Clock } from "lucide-react";
 import type { MarketSentiment, Prediction } from "@/types";
 
 interface MarketSentimentDisplayProps {
-  sentiment: MarketSentiment;
+  sentiment: MarketSentiment | null;
   prediction: Prediction | null;
 }
 
@@ -90,16 +90,25 @@ export function MarketSentimentDisplay({
   sentiment,
   prediction,
 }: MarketSentimentDisplayProps) {
-  if (!sentiment.available || sentiment.markets.length === 0) {
+  if (!sentiment || !sentiment.available || sentiment.markets.length === 0) {
     return (
-      <Card>
+      <Card className="shadow-xl shadow-black/20 backdrop-blur-sm bg-card/95 h-fit">
         <CardHeader className="pb-3">
-          <CardTitle className="text-lg">Market Sentiment</CardTitle>
+          <div className="flex items-center gap-2">
+            <Activity className="w-5 h-5 text-muted-foreground" />
+            <CardTitle className="text-lg">Market Sentiment</CardTitle>
+          </div>
         </CardHeader>
         <CardContent>
-          <p className="text-muted-foreground text-sm">
-            No Polymarket data available for this fixture.
-          </p>
+          <div className="flex items-start gap-3 p-4 rounded-lg bg-secondary/30 border border-border/50">
+            <Minus className="w-5 h-5 text-muted-foreground shrink-0 mt-0.5" />
+            <div>
+              <p className="font-medium text-foreground mb-1">No market data</p>
+              <p className="text-sm text-muted-foreground">
+                Polymarket data is not available for this fixture.
+              </p>
+            </div>
+          </div>
         </CardContent>
       </Card>
     );
@@ -112,14 +121,24 @@ export function MarketSentimentDisplay({
   const confluence = getConfluenceStatus(sentiment, prediction);
   const Icon = confluence.icon;
 
+  const confluenceStyles = {
+    aligned: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30",
+    divergent: "bg-amber-500/10 text-amber-400 border-amber-500/30",
+    neutral: "bg-secondary text-muted-foreground border-border",
+  };
+
   return (
-    <Card>
+    <Card className="shadow-xl shadow-black/20 backdrop-blur-sm bg-card/95 h-fit">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
-          <CardTitle className="text-lg">Polymarket Odds</CardTitle>
-          <span className="text-xs text-muted-foreground">
-            Updated {getRelativeTime(sentiment.fetchedAt)}
-          </span>
+          <div className="flex items-center gap-2">
+            <Activity className="w-5 h-5 text-blue-500" />
+            <CardTitle className="text-lg">Polymarket Odds</CardTitle>
+          </div>
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Clock className="w-3.5 h-3.5" />
+            {getRelativeTime(sentiment.fetchedAt)}
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -127,18 +146,12 @@ export function MarketSentimentDisplay({
           <>
             {/* Confluence indicator */}
             {prediction && (
-              <div className="flex items-center gap-2 pb-3 border-b border-border">
+              <div className="pb-4 border-b border-border/50">
                 <Badge
-                  variant={
-                    confluence.status === "aligned"
-                      ? "default"
-                      : confluence.status === "divergent"
-                      ? "secondary"
-                      : "outline"
-                  }
-                  className="gap-1"
+                  variant="outline"
+                  className={`gap-1.5 px-3 py-1.5 ${confluenceStyles[confluence.status]}`}
                 >
-                  <Icon className="h-3 w-3" />
+                  <Icon className="h-3.5 w-3.5" />
                   {confluence.message}
                 </Badge>
               </div>
@@ -149,9 +162,12 @@ export function MarketSentimentDisplay({
 
             {/* Volume indicator */}
             {matchResultMarket.volume > 0 && (
-              <div className="flex items-center justify-between text-sm pt-2 border-t border-border">
-                <span className="text-muted-foreground">Trading Volume</span>
-                <span className="font-medium tabular-nums">
+              <div className="flex items-center justify-between text-sm pt-3 border-t border-border/50">
+                <div className="flex items-center gap-1.5 text-muted-foreground">
+                  <DollarSign className="w-4 h-4" />
+                  <span>Trading Volume</span>
+                </div>
+                <span className="font-semibold tabular-nums text-foreground">
                   ${matchResultMarket.volume.toLocaleString()}
                 </span>
               </div>
@@ -163,8 +179,8 @@ export function MarketSentimentDisplay({
         {sentiment.markets
           .filter((m) => m.type !== "MATCH_RESULT")
           .map((market) => (
-            <div key={market.type} className="pt-3 border-t border-border">
-              <h4 className="text-sm font-medium text-muted-foreground mb-2">
+            <div key={market.type} className="pt-4 border-t border-border/50">
+              <h4 className="text-sm font-medium text-muted-foreground mb-3">
                 {market.question}
               </h4>
               <OutcomeBars outcomes={market.outcomes} />

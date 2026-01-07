@@ -89,18 +89,14 @@ export async function GET(request: NextRequest) {
         await setSentiment(sentiment);
       }
 
-      // Step 3: Filter to selected fixtures
-      const selectedFixtures = filterSelectedFixtures(fixtures, sentimentMap);
-      console.log(`[Weekly Fixtures] ${date}: Selected ${selectedFixtures.length} fixtures`);
-
-      // Store selected fixture IDs
+      // Store all fixture IDs (we now analyze all fixtures)
       await setSelectedFixtures(
         date,
-        selectedFixtures.map((f: Fixture) => f.id)
+        fixtures.map((f: Fixture) => f.id)
       );
 
-      // Step 4 & 5: Generate AI analysis and predictions
-      for (const fixture of selectedFixtures) {
+      // Step 3: Generate AI analysis and predictions for ALL fixtures
+      for (const fixture of fixtures) {
         const sentiment = sentimentMap.get(fixture.id) || null;
 
         // Generate AI analysis (no lineups at weekly job time)
@@ -117,11 +113,11 @@ export async function GET(request: NextRequest) {
       }
 
       totalFixtures += fixtures.length;
-      totalSelected += selectedFixtures.length;
+      totalSelected += fixtures.length;
       results.push({
         date,
         total: fixtures.length,
-        selected: selectedFixtures.length,
+        selected: fixtures.length,
       });
     }
 

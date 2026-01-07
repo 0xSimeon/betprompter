@@ -82,21 +82,16 @@ export async function GET(request: NextRequest) {
       await setSentiment(sentiment);
     }
 
-    // Step 3: Filter to selected fixtures
-    console.log("[Daily Fixtures] Filtering selected fixtures...");
-    const selectedFixtures = filterSelectedFixtures(fixtures, sentimentMap);
-    console.log(`[Daily Fixtures] Selected ${selectedFixtures.length} fixtures`);
+    // Step 3: Generate AI analysis and predictions for ALL fixtures
+    console.log("[Daily Fixtures] Generating AI analysis for all fixtures...");
 
-    // Store selected fixture IDs
+    // Store all fixture IDs as selected (we now analyze all)
     await setSelectedFixtures(
       today,
-      selectedFixtures.map((f) => f.id)
+      fixtures.map((f) => f.id)
     );
 
-    // Step 4 & 5: Generate AI analysis and predictions for selected fixtures
-    console.log("[Daily Fixtures] Generating AI analysis...");
-
-    for (const fixture of selectedFixtures) {
+    for (const fixture of fixtures) {
       const sentiment = sentimentMap.get(fixture.id) || null;
 
       // Generate AI analysis (no lineups yet at daily job time)
@@ -112,6 +107,10 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    // Track which fixtures are "featured" (big teams or high market confidence)
+    const featuredFixtures = filterSelectedFixtures(fixtures, sentimentMap);
+    console.log(`[Daily Fixtures] ${featuredFixtures.length} featured fixtures (big teams/high confidence)`)
+
     // Mark job as complete
     await setJobLastRun("daily-fixtures", nowGMT1());
 
@@ -119,12 +118,8 @@ export async function GET(request: NextRequest) {
       success: true,
       date: today,
       total: fixtures.length,
-      selected: selectedFixtures.length,
-      byCategory: {
-        banker: selectedFixtures.filter(
-          (f) => sentimentMap.get(f.id)?.available
-        ).length,
-      },
+      analyzed: fixtures.length,
+      featured: featuredFixtures.length,
     };
 
     console.log("[Daily Fixtures] Job completed:", result);

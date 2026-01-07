@@ -7,8 +7,6 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   getFixture,
   getLineups,
-  getSentiment,
-  getAnalysis,
   setLineups,
   setSentiment,
   setAnalysis,
@@ -17,9 +15,7 @@ import {
 import {
   fetchLineups,
   fetchSentimentForFixture,
-  refreshSentimentPrices,
   generateAnalysis,
-  shouldRegenerateAnalysis,
   generatePrediction,
 } from "@/services";
 import { minutesUntilKickoff } from "@/lib/date";
@@ -63,43 +59,30 @@ export async function GET(
       lineups = await getLineups(fixtureId);
     }
 
-    // Fetch or refresh sentiment
-    let sentiment: MarketSentiment | null = await getSentiment(fixtureId);
-    if (sentiment?.available) {
-      // Refresh existing sentiment prices
-      sentiment = await refreshSentimentPrices(sentiment);
-      await setSentiment(sentiment);
-      sentimentUpdated = true;
-    } else {
-      // Fetch new sentiment if not available
-      console.log(`[Refresh] Fetching sentiment for ${fixtureId}`);
-      sentiment = await fetchSentimentForFixture(
-        fixtureId,
-        fixture.homeTeam.name,
-        fixture.awayTeam.name,
-        fixture.leagueCode,
-        fixture.kickoff
-      );
-      await setSentiment(sentiment);
-      sentimentUpdated = sentiment.available;
-    }
+    // ALWAYS re-fetch sentiment from Polymarket when user clicks refresh
+    console.log(`[Refresh] Fetching sentiment for ${fixtureId}`);
+    let sentiment: MarketSentiment | null = await fetchSentimentForFixture(
+      fixtureId,
+      fixture.homeTeam.name,
+      fixture.awayTeam.name,
+      fixture.leagueCode,
+      fixture.kickoff
+    );
+    await setSentiment(sentiment);
+    sentimentUpdated = sentiment.available;
+    console.log(`[Refresh] Sentiment available: ${sentiment.available}, markets: ${sentiment.markets.length}`);
 
-    // Regenerate analysis if lineups or sentiment changed
-    const existingAnalysis = await getAnalysis(fixtureId);
-    const shouldRegenerate = shouldRegenerateAnalysis(existingAnalysis, fixture, sentiment, lineups);
+    // ALWAYS regenerate analysis and prediction when user explicitly refreshes
+    console.log(`[Refresh] Regenerating analysis for ${fixtureId}`);
 
-    if (shouldRegenerate || (sentimentUpdated && sentiment?.available)) {
-      const reason = lineupsUpdated ? "with lineups" : sentimentUpdated ? "with sentiment" : "inputs changed";
-      console.log(`[Refresh] Regenerating analysis for ${fixtureId} ${reason}`);
+    const newAnalysis = await generateAnalysis(fixture, sentiment, lineups);
+    await setAnalysis(newAnalysis);
 
-      const newAnalysis = await generateAnalysis(fixture, sentiment, lineups);
-      await setAnalysis(newAnalysis);
+    const newPrediction = generatePrediction(fixture, sentiment, newAnalysis);
+    await setPrediction(newPrediction);
 
-      const newPrediction = generatePrediction(fixture, sentiment, newAnalysis);
-      await setPrediction(newPrediction);
-
-      analysisUpdated = true;
-    }
+    analysisUpdated = true;
+    console.log(`[Refresh] Generated prediction: category=${newPrediction.category}, market=${newPrediction.primaryMarket?.type}`)
 
     return NextResponse.json({
       success: true,

@@ -79,11 +79,78 @@ function getAIMarketAlignment(
 }
 
 /**
- * Determine prediction category based on AI + Market confluence
+ * Calculate Expected Value (EV) for a bet
+ * EV = (AI_Probability * Potential_Win) - (1 - AI_Probability) * Stake
+ * Simplified: EV% = AI_Prob - Market_Prob (edge over market)
+ */
+function calculateEV(
+  aiProb: number,
+  marketProb: number
+): { ev: number; hasEdge: boolean; edgePercent: number } {
+  // Edge is the difference between AI's probability and market's implied probability
+  const edge = aiProb - marketProb;
+  const edgePercent = Math.round(edge * 100);
+
+  // Consider it valuable if AI sees >5% edge over market
+  const hasEdge = edge > 0.05;
+
+  return { ev: edge, hasEdge, edgePercent };
+}
+
+/**
+ * Get AI probability for a specific lean direction
+ */
+function getAIProbForLean(
+  aiLean: string,
+  probabilities: { homeWin: number; draw: number; awayWin: number } | undefined
+): number {
+  if (!probabilities) return 0.5; // Default 50% if no probabilities
+
+  switch (aiLean.toUpperCase()) {
+    case "HOME":
+      return probabilities.homeWin;
+    case "AWAY":
+      return probabilities.awayWin;
+    case "DRAW":
+      return probabilities.draw;
+    default:
+      return 0.5;
+  }
+}
+
+/**
+ * Get market probability for AI's lean direction
+ */
+function getMarketProbForLean(
+  aiLean: string,
+  sentiment: MarketSentiment | null
+): number {
+  if (!sentiment?.available) return 0.5;
+
+  const matchResult = sentiment.markets.find((m) => m.type === "MATCH_RESULT");
+  if (!matchResult) return 0.5;
+
+  const leanLower = aiLean.toLowerCase();
+  const outcome = matchResult.outcomes.find((o) => {
+    const nameLower = o.name.toLowerCase();
+    return (
+      (leanLower === "home" && nameLower.includes("home")) ||
+      (leanLower === "away" && nameLower.includes("away")) ||
+      (leanLower === "draw" && nameLower.includes("draw"))
+    );
+  });
+
+  return outcome?.probability || 0.5;
+}
+
+/**
+ * Determine prediction category based on AI + Market confluence + EV
  *
- * BANKER: Strong agreement between AI and market (high confidence from both)
- * VALUE: AI sees edge that market may be undervaluing
- * NO_BET: Conflicting signals, low confidence, or insufficient data
+ * BANKER: Strong agreement between AI and market (high confidence, positive EV, aligned)
+ * VALUE: AI sees edge that market may be undervaluing (positive EV but higher risk)
+ * RISKY: Lower confidence or negative EV
+ *
+ * NOTE: We ALWAYS provide a prediction. RISKY replaces the old NO_BET.
  */
 function classifyPrediction(
   sentiment: MarketSentiment | null,
@@ -97,83 +164,90 @@ function classifyPrediction(
   const aiLean = groqAnalysis.lean;
   const hasSuggestedOutcome = !!groqAnalysis.suggestedOutcome;
 
-  // If AI says NEUTRAL or LOW confidence, don't bet regardless of market
-  if (aiLean === "NEUTRAL" || aiConfidence === "LOW") {
-    return "NO_BET";
-  }
+  // Get AI's probability estimate for their lean
+  const aiProb = getAIProbForLean(aiLean, groqAnalysis.probabilities);
+  const marketProb = getMarketProbForLean(aiLean, sentiment);
+  const { hasEdge, edgePercent } = calculateEV(aiProb, marketProb);
 
-  // No market data - only bet if AI is very confident
+  // No market data cases - rely solely on AI
   if (!hasMarketData) {
-    if (aiConfidence === "HIGH" && hasSuggestedOutcome && geminiVerification.passed) {
-      return "VALUE"; // AI-only value play
+    if (aiConfidence === "HIGH" && aiProb >= 0.65 && geminiVerification.passed) {
+      return "VALUE"; // Strong AI conviction without market data
     }
-    return "NO_BET";
+    if (aiConfidence === "MEDIUM" && aiProb >= 0.55) {
+      return "VALUE";
+    }
+    return "RISKY";
   }
 
   const alignment = getAIMarketAlignment(aiLean, topOutcome);
 
-  // Conflicting signals - AI and market disagree
-  if (alignment === -1 && topOutcome.probability >= 0.55) {
-    return "NO_BET";
-  }
-
-  // BANKER: Strong market signal (>=70%) + AI agrees or doesn't conflict
-  // Also need adequate volume and passed verification
-  // Note: aiConfidence is already known to be HIGH or MEDIUM at this point (LOW returns early)
+  // BANKER: Strong confluence between AI and market
+  // - Market favors the outcome (>=65%)
+  // - AI agrees (alignment >= 0)
+  // - AI has high probability estimate (>=60%)
+  // - Sufficient volume (liquidity)
+  // - Gemini verification passed
   if (
-    topOutcome.probability >= BANKER_PROBABILITY_THRESHOLD &&
-    volume >= 1000 &&
-    alignment >= 0 && // Not conflicting
+    topOutcome.probability >= 0.65 &&
+    alignment >= 0 &&
+    aiProb >= 0.60 &&
+    volume >= 500 &&
     geminiVerification.passed
   ) {
     return "BANKER";
   }
 
-  // BANKER with lower threshold if AI strongly agrees
+  // BANKER with even stronger AI conviction
   if (
-    topOutcome.probability >= 0.65 &&
-    volume >= 500 &&
-    alignment === 1 && // AI agrees with market
+    aiProb >= 0.70 &&
+    alignment === 1 && // AI agrees with market leader
     aiConfidence === "HIGH" &&
     geminiVerification.passed
   ) {
     return "BANKER";
   }
 
-  // VALUE: Market shows opportunity (40-69%) + AI has suggestion
-  // Note: aiConfidence is already known to be HIGH or MEDIUM at this point
+  // VALUE: AI sees positive edge over market (>5% edge)
+  if (hasEdge && edgePercent >= 5) {
+    // AI thinks this outcome is undervalued by market
+    if (aiConfidence !== "LOW" && geminiVerification.passed) {
+      return "VALUE";
+    }
+  }
+
+  // VALUE: Market shows opportunity but not dominant
   if (
     topOutcome.probability >= VALUE_PROBABILITY_MIN &&
     topOutcome.probability < BANKER_PROBABILITY_THRESHOLD &&
+    aiConfidence !== "LOW" &&
     hasSuggestedOutcome
   ) {
     return "VALUE";
   }
 
-  // VALUE: AI sees value against the market (contrarian play)
-  // AI is confident in opposite direction but market isn't overwhelming
-  if (
-    alignment === -1 &&
-    topOutcome.probability < 0.55 && // Market not too confident
-    aiConfidence === "HIGH" &&
-    hasSuggestedOutcome
-  ) {
-    return "VALUE"; // Contrarian value play
+  // VALUE: AI confident despite market not strongly agreeing
+  if (aiConfidence === "HIGH" && aiProb >= 0.55 && alignment >= 0) {
+    return "VALUE";
   }
 
-  return "NO_BET";
+  // RISKY: Everything else
+  // - Conflicting signals (AI vs market)
+  // - Low AI confidence
+  // - Negative or minimal edge
+  // - Gemini flagged issues
+  return "RISKY";
 }
 
 /**
  * Build primary market selection
+ * NOTE: Always returns a market - even for RISKY predictions
  */
 function buildPrimaryMarket(
   sentiment: MarketSentiment | null,
   analysis: AIAnalysis,
-  category: PredictionCategory
+  _category: PredictionCategory
 ): MarketSelection | null {
-  if (category === "NO_BET") return null;
-
   const { groqAnalysis } = analysis;
 
   // Use AI suggested market/outcome if available
@@ -194,7 +268,7 @@ function buildPrimaryMarket(
     };
   }
 
-  // Fallback to match result top outcome
+  // Fallback to match result top outcome from market
   const topOutcome = getTopOutcome(sentiment);
   if (topOutcome) {
     return {
@@ -205,7 +279,28 @@ function buildPrimaryMarket(
     };
   }
 
-  return null;
+  // Last resort: Use AI lean to generate a pick even without market data
+  if (groqAnalysis.lean !== "NEUTRAL") {
+    const leanToSelection: Record<string, string> = {
+      HOME: "Home Win",
+      AWAY: "Away Win",
+      DRAW: "Draw",
+    };
+    return {
+      type: "MATCH_RESULT",
+      selection: leanToSelection[groqAnalysis.lean] || "Home Win",
+      confidence: groqAnalysis.confidence === "HIGH" ? 65 : groqAnalysis.confidence === "MEDIUM" ? 50 : 35,
+      reasoning: groqAnalysis.narrative.split(".")[0] + ".",
+    };
+  }
+
+  // Absolute fallback - always provide something
+  return {
+    type: "MATCH_RESULT",
+    selection: "Home Win",
+    confidence: 30,
+    reasoning: "Insufficient data for confident analysis.",
+  };
 }
 
 /**
@@ -241,6 +336,7 @@ function buildAlternativeMarket(
 
 /**
  * Generate disclaimers based on analysis
+ * For RISKY picks, these become the "Why Risky?" reasons
  */
 function generateDisclaimers(
   analysis: AIAnalysis,
@@ -262,9 +358,26 @@ function generateDisclaimers(
     disclaimers.push("Some contextual factors may be missing.");
   }
 
-  // Category-specific
+  // Category-specific reasons
   if (category === "VALUE") {
     disclaimers.push("Value play - higher risk, potential mispricing.");
+  }
+
+  if (category === "RISKY") {
+    // Add specific reasons why this is risky
+    if (analysis.groqAnalysis.confidence === "LOW") {
+      disclaimers.push("AI confidence is low for this fixture.");
+    }
+    if (analysis.groqAnalysis.lean === "NEUTRAL") {
+      disclaimers.push("No clear directional edge identified.");
+    }
+    if (!analysis.geminiVerification.passed) {
+      disclaimers.push("Verification flagged potential issues with analysis.");
+    }
+    // Ensure we always have at least one reason for RISKY
+    if (disclaimers.length === 0) {
+      disclaimers.push("Conflicting signals between AI and market data.");
+    }
   }
 
   return disclaimers;
@@ -331,6 +444,11 @@ export function evaluatePrediction(
 
     case "OVER_2_5":
       if (total > 2.5) return "WIN";
+      return "LOSS";
+
+    case "BTTS":
+      if (selection === "Yes" && home > 0 && away > 0) return "WIN";
+      if (selection === "No" && (home === 0 || away === 0)) return "WIN";
       return "LOSS";
 
     default:

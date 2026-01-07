@@ -34,12 +34,14 @@ function initializeStats(): StatsAggregate {
     byCategory: {
       banker: { total: 0, wins: 0, losses: 0, pushes: 0 },
       value: { total: 0, wins: 0, losses: 0, pushes: 0 },
+      risky: { total: 0, wins: 0, losses: 0, pushes: 0 },
     },
     byMarket: {
       MATCH_RESULT: { total: 0, wins: 0, losses: 0, pushes: 0 },
       DOUBLE_CHANCE: { total: 0, wins: 0, losses: 0, pushes: 0 },
       OVER_1_5: { total: 0, wins: 0, losses: 0, pushes: 0 },
       OVER_2_5: { total: 0, wins: 0, losses: 0, pushes: 0 },
+      BTTS: { total: 0, wins: 0, losses: 0, pushes: 0 },
     },
     lastUpdated: nowGMT1(),
   };
@@ -58,7 +60,7 @@ function updateStats(
   else if (result === "VOID") stats.voids++;
 
   // Update by category
-  const category = outcome.prediction.category.toLowerCase() as "banker" | "value";
+  const category = outcome.prediction.category.toLowerCase() as "banker" | "value" | "risky";
   if (stats.byCategory[category]) {
     stats.byCategory[category].total++;
     if (result === "WIN") stats.byCategory[category].wins++;
@@ -117,8 +119,7 @@ export async function GET(request: NextRequest) {
       const prediction = await getPrediction(fixtureId);
       if (!prediction) continue;
 
-      // Skip NO_BET predictions
-      if (prediction.category === "NO_BET") continue;
+      // All predictions (BANKER, VALUE, RISKY) are now tracked
 
       // Fetch final score
       const finalScore = await fetchFinalScore(fixtureId);

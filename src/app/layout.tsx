@@ -27,10 +27,17 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen flex flex-col`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen flex flex-col gradient-dark-radial`}
       >
         <Header />
-        <main className="flex-1">{children}</main>
+        <main className="flex-1 relative">
+          {/* Subtle atmospheric effects */}
+          <div className="fixed inset-0 pointer-events-none">
+            <div className="absolute top-0 left-1/4 w-96 h-96 bg-emerald-500/5 rounded-full blur-3xl" />
+            <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-blue-500/3 rounded-full blur-3xl" />
+          </div>
+          <div className="relative z-10">{children}</div>
+        </main>
         <Footer />
       </body>
     </html>

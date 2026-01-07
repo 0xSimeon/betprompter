@@ -53,6 +53,6 @@ export const API_URLS = {
 
 // Disclaimer text
 export const DISCLAIMER =
-  "This website is for informational purposes only. It is not betting advice. Betting involves risk.";
+  "This website is for informational purposes only. It is not betting advice. Betting involves risk. As usual, no crying in the casino.";
 
-export const ATTRIBUTION = "Built by Simeon Udoh - Personal football analysis project";
+export const ATTRIBUTION = "Built with ❤️ by Simeon Udoh";

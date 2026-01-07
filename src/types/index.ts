@@ -108,6 +108,15 @@ export interface GroqAnalysis {
   suggestedMarket: MarketType | null;
   suggestedOutcome: string | null;
   concerns: string[];
+  // Probability estimates from AI (0-1)
+  probabilities?: {
+    homeWin: number;
+    draw: number;
+    awayWin: number;
+    over15: number;
+    over25: number;
+    btts: number;
+  };
 }
 
 export interface GeminiVerification {
@@ -129,7 +138,7 @@ export interface AIAnalysis {
 // Prediction Types
 // ============================================
 
-export type PredictionCategory = "BANKER" | "VALUE" | "NO_BET";
+export type PredictionCategory = "BANKER" | "VALUE" | "RISKY";
 
 export interface MarketSelection {
   type: MarketType;
@@ -195,6 +204,7 @@ export interface StatsAggregate {
   byCategory: {
     banker: CategoryStats;
     value: CategoryStats;
+    risky: CategoryStats;
   };
   byMarket: Record<MarketType, CategoryStats>;
   lastUpdated: string; // GMT+1

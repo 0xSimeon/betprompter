@@ -44,15 +44,15 @@ export function utcToGMT1(utcString: string): string {
 }
 
 /**
- * Format kickoff time for display (e.g., "15:00")
+ * Format kickoff time for display (e.g., "5:30 PM")
  */
 export function formatKickoffTime(isoString: string): string {
   const date = new Date(isoString);
-  return date.toLocaleTimeString("en-GB", {
+  return date.toLocaleTimeString("en-US", {
     timeZone: TIMEZONE,
-    hour: "2-digit",
+    hour: "numeric",
     minute: "2-digit",
-    hour12: false,
+    hour12: true,
   });
 }
 

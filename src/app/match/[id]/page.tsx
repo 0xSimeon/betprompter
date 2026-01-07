@@ -2,16 +2,13 @@ import { notFound } from "next/navigation";
 import { getMatchDetail } from "@/lib/kv";
 import {
   MatchHeader,
-  PredictionCard,
-  TheAngle,
+  AnalysisCard,
   MarketSentimentDisplay,
   LineupsPanel,
   AutoRefreshWrapper,
   RefreshButton,
 } from "@/components/match";
 import { FixtureStatusBadge } from "@/components/shared";
-import { Card, CardContent } from "@/components/ui/card";
-import { DISCLAIMER } from "@/config/constants";
 
 interface MatchPageProps {
   params: Promise<{ id: string }>;
@@ -36,7 +33,7 @@ export default async function MatchPage({ params }: MatchPageProps) {
   const lineupsAvailable = match.lineups?.available ?? false;
 
   return (
-    <div className="container mx-auto px-4 py-6 max-w-2xl">
+    <div className="container mx-auto px-4 py-6 max-w-5xl">
       <AutoRefreshWrapper
         fixtureId={fixtureId}
         kickoff={match.kickoff}
@@ -60,26 +57,25 @@ export default async function MatchPage({ params }: MatchPageProps) {
           {/* Match Header */}
           <MatchHeader fixture={match} />
 
-          {/* Prediction Card */}
-          {match.prediction && <PredictionCard prediction={match.prediction} />}
+          {/* Side-by-side: Analysis + Market Sentiment */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Left: Combined Analysis Card */}
+            {match.prediction && (
+              <AnalysisCard
+                prediction={match.prediction}
+                analysis={match.analysis}
+                sentiment={match.sentiment}
+              />
+            )}
 
-          {/* The Angle */}
-          {match.prediction && (
-            <TheAngle
-              narrative={match.prediction.narrative}
-              keyFactors={match.prediction.keyFactors}
-            />
-          )}
-
-          {/* Market Sentiment */}
-          {match.sentiment && (
+            {/* Right: Market Sentiment - Always show */}
             <MarketSentimentDisplay
               sentiment={match.sentiment}
               prediction={match.prediction}
             />
-          )}
+          </div>
 
-          {/* Lineups */}
+          {/* Lineups - Full width below */}
           {match.lineups && (
             <LineupsPanel
               lineups={match.lineups}
@@ -87,13 +83,6 @@ export default async function MatchPage({ params }: MatchPageProps) {
               awayTeamName={match.awayTeam.shortName || match.awayTeam.name}
             />
           )}
-
-          {/* Disclaimer Banner */}
-          <Card className="bg-amber-500/10 border-amber-500/20">
-            <CardContent className="py-3">
-              <p className="text-sm text-amber-400/90">{DISCLAIMER}</p>
-            </CardContent>
-          </Card>
         </div>
       </AutoRefreshWrapper>
     </div>

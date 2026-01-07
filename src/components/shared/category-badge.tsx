@@ -13,13 +13,13 @@ interface CategoryBadgeProps {
 const categoryStyles: Record<PredictionCategory, string> = {
   BANKER: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
   VALUE: "bg-amber-500/20 text-amber-400 border-amber-500/30",
-  NO_BET: "bg-zinc-500/20 text-zinc-400 border-zinc-500/30",
+  RISKY: "bg-red-500/20 text-red-400 border-red-500/30",
 };
 
 const categoryLabels: Record<PredictionCategory, string> = {
   BANKER: "Banker",
   VALUE: "Value",
-  NO_BET: "No Bet",
+  RISKY: "Risky",
 };
 
 const sizeStyles = {
