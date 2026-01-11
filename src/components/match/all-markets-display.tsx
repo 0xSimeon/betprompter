@@ -12,7 +12,7 @@ interface AllMarketsDisplayProps {
 
 /**
  * Get market probability for a specific selection from sentiment
- * Handles Polymarket's "Yes"/"No" outcomes for Over/Under markets
+ * Handles Polymarket's various outcome naming conventions
  */
 function getMarketProbForSelection(
   sentiment: MarketSentiment | null | undefined,
@@ -27,28 +27,61 @@ function getMarketProbForSelection(
   const selectionLower = selection.toLowerCase();
 
   // For Over/Under markets, Polymarket uses "Yes"/"No" outcomes
-  // Map "Over X.X" selections to "Yes", "Under X.X" to "No"
   if (marketType === "OVER_2_5" || marketType === "OVER_1_5") {
     const isOverSelection = selectionLower.includes("over");
-    const targetOutcome = isOverSelection ? "yes" : "no";
-    const outcome = market.outcomes.find(
-      (o) => o.name.toLowerCase() === targetOutcome
+    // Try "Yes"/"No" first
+    let outcome = market.outcomes.find(
+      (o) => o.name.toLowerCase() === (isOverSelection ? "yes" : "no")
     );
+    // Also try "Over"/"Under" naming
+    if (!outcome) {
+      outcome = market.outcomes.find(
+        (o) => o.name.toLowerCase().includes(isOverSelection ? "over" : "under")
+      );
+    }
     if (outcome) {
       return Math.round(outcome.probability * 100);
     }
   }
 
-  // For Match Result, try direct matching
+  // For Double Chance, calculate from Match Result if available
+  if (marketType === "DOUBLE_CHANCE") {
+    const matchResult = sentiment.markets.find((m) => m.type === "MATCH_RESULT");
+    if (matchResult) {
+      // 1X = Home + Draw, X2 = Away + Draw, 12 = Home + Away
+      const homeOutcome = matchResult.outcomes.find((o) =>
+        o.name.toLowerCase().includes("home") ||
+        (o.name.toLowerCase().includes("win") && !o.name.toLowerCase().includes("away") && !o.name.toLowerCase().includes("draw"))
+      );
+      const awayOutcome = matchResult.outcomes.find((o) =>
+        o.name.toLowerCase().includes("away") ||
+        matchResult.outcomes.indexOf(o) === matchResult.outcomes.length - 1 // Last non-draw is usually away
+      );
+      const drawOutcome = matchResult.outcomes.find((o) =>
+        o.name.toLowerCase().includes("draw")
+      );
+
+      if (selectionLower === "1x" && homeOutcome && drawOutcome) {
+        return Math.round((homeOutcome.probability + drawOutcome.probability) * 100);
+      }
+      if (selectionLower === "x2" && awayOutcome && drawOutcome) {
+        return Math.round((awayOutcome.probability + drawOutcome.probability) * 100);
+      }
+      if (selectionLower === "12" && homeOutcome && awayOutcome) {
+        return Math.round((homeOutcome.probability + awayOutcome.probability) * 100);
+      }
+    }
+  }
+
+  // For Match Result, handle team names vs "Home Win"/"Away Win"
   const outcome = market.outcomes.find((o) => {
     const nameLower = o.name.toLowerCase();
-    // Check for exact or partial matches
     return (
       nameLower.includes(selectionLower) ||
       selectionLower.includes(nameLower) ||
-      // Handle "Home Win" vs team name matching
+      // "Home Win" should match any outcome containing "win" that's not "away" or "draw"
       (selectionLower.includes("home") && nameLower.includes("win") && !nameLower.includes("away")) ||
-      (selectionLower.includes("away") && nameLower.includes("win") && !nameLower.includes("home")) ||
+      (selectionLower.includes("away") && nameLower.includes("win")) ||
       (selectionLower.includes("draw") && nameLower.includes("draw"))
     );
   });
