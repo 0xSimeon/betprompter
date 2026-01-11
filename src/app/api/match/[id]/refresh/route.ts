@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   getFixture,
+  setFixture,
   getLineups,
   setLineups,
   setSentiment,
@@ -14,12 +15,14 @@ import {
 } from "@/lib/kv";
 import {
   fetchLineups,
+  fetchFixtureById,
   fetchSentimentForFixture,
   generateAnalysis,
-  generatePrediction,
+  generateEnginePrediction,
+  settleMatch,
 } from "@/services";
 import { minutesUntilKickoff } from "@/lib/date";
-import type { Lineups, MarketSentiment } from "@/types";
+import type { Fixture, Lineups, MarketSentiment } from "@/types";
 
 export async function GET(
   request: NextRequest,
@@ -33,9 +36,30 @@ export async function GET(
   }
 
   try {
-    const fixture = await getFixture(fixtureId);
+    let fixture = await getFixture(fixtureId);
     if (!fixture) {
       return NextResponse.json({ error: "Fixture not found" }, { status: 404 });
+    }
+
+    // Refresh fixture status from API to get latest state
+    const freshFixture = await fetchFixtureById(fixtureId);
+    if (freshFixture && freshFixture.status !== fixture.status) {
+      await setFixture(freshFixture);
+      fixture = freshFixture;
+      console.log(`[Refresh] Fixture status updated: ${fixture.status}`);
+    }
+
+    // If match is finished, attempt auto-settlement and return early
+    if (fixture.status === "FINISHED") {
+      const settlement = await settleMatch(fixtureId);
+      return NextResponse.json({
+        success: true,
+        fixtureId,
+        matchFinished: true,
+        settled: settlement.settled,
+        result: settlement.result,
+        alreadySettled: settlement.alreadySettled,
+      });
     }
 
     const minsUntil = minutesUntilKickoff(fixture.kickoff);
@@ -78,7 +102,7 @@ export async function GET(
     const newAnalysis = await generateAnalysis(fixture, sentiment, lineups);
     await setAnalysis(newAnalysis);
 
-    const newPrediction = generatePrediction(fixture, sentiment, newAnalysis);
+    const newPrediction = generateEnginePrediction(fixture, sentiment, newAnalysis);
     await setPrediction(newPrediction);
 
     analysisUpdated = true;

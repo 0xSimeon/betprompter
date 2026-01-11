@@ -26,9 +26,11 @@ import {
   fetchSentimentForFixture,
   generateAnalysis,
   filterSelectedFixtures,
-  generatePrediction,
+  generateEnginePrediction,
+  scoreAllMarkets,
+  DAILY_BET_CAP,
 } from "@/services";
-import type { MarketSentiment } from "@/types";
+import type { Fixture, MarketSentiment, Prediction } from "@/types";
 
 // Verify cron secret to prevent unauthorized access
 const CRON_SECRET = process.env.CRON_SECRET || "";
@@ -83,13 +85,14 @@ export async function GET(request: NextRequest) {
     }
 
     // Step 3: Generate AI analysis and predictions for ALL fixtures
+    // Collect predictions with scores for daily cap enforcement
     console.log("[Daily Fixtures] Generating AI analysis for all fixtures...");
 
-    // Store all fixture IDs as selected (we now analyze all)
-    await setSelectedFixtures(
-      today,
-      fixtures.map((f) => f.id)
-    );
+    const dayPredictions: Array<{
+      fixture: Fixture;
+      prediction: Prediction;
+      topScore: number;
+    }> = [];
 
     for (const fixture of fixtures) {
       const sentiment = sentimentMap.get(fixture.id) || null;
@@ -98,18 +101,37 @@ export async function GET(request: NextRequest) {
       const analysis = await generateAnalysis(fixture, sentiment, null);
       await setAnalysis(analysis);
 
-      // Generate prediction
-      const prediction = generatePrediction(fixture, sentiment, analysis);
+      // Generate prediction using ENGINE_SPEC scoring model
+      const prediction = generateEnginePrediction(fixture, sentiment, analysis);
       await setPrediction(prediction);
+
+      // Get top score for ranking
+      const scores = scoreAllMarkets(fixture, sentiment, analysis);
+      const topScore = scores.length > 0 ? scores[0].finalScore : 0;
+
+      dayPredictions.push({ fixture, prediction, topScore });
 
       console.log(
         `[Daily Fixtures] ${fixture.homeTeam.shortName} vs ${fixture.awayTeam.shortName}: ${prediction.category}`
       );
     }
 
-    // Track which fixtures are "featured" (big teams or high market confidence)
-    const featuredFixtures = filterSelectedFixtures(fixtures, sentimentMap);
-    console.log(`[Daily Fixtures] ${featuredFixtures.length} featured fixtures (big teams/high confidence)`)
+    // Per ENGINE_SPEC: Apply daily cap (max 5 bets per calendar day)
+    // Sort by top score descending and take top 5
+    const rankedPredictions = dayPredictions
+      .filter(({ topScore }) => topScore >= 40) // MIN_SCORE_THRESHOLD
+      .sort((a, b) => b.topScore - a.topScore)
+      .slice(0, DAILY_BET_CAP);
+
+    // Store only the selected fixture IDs for the day
+    await setSelectedFixtures(
+      today,
+      rankedPredictions.map(({ fixture }) => fixture.id)
+    );
+
+    console.log(
+      `[Daily Fixtures] Selected ${rankedPredictions.length}/${fixtures.length} fixtures (daily cap: ${DAILY_BET_CAP})`
+    );
 
     // Mark job as complete
     await setJobLastRun("daily-fixtures", nowGMT1());
@@ -119,7 +141,7 @@ export async function GET(request: NextRequest) {
       date: today,
       total: fixtures.length,
       analyzed: fixtures.length,
-      featured: featuredFixtures.length,
+      selected: rankedPredictions.length,
     };
 
     console.log("[Daily Fixtures] Job completed:", result);

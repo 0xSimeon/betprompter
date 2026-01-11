@@ -224,6 +224,11 @@ export async function getFixturesWithPredictions(
     const fixture = await getFixture(fixtureId);
     if (!fixture) continue;
 
+    // Skip finished, postponed, or cancelled matches
+    if (["FINISHED", "POSTPONED", "CANCELLED", "SUSPENDED"].includes(fixture.status)) {
+      continue;
+    }
+
     const [sentiment, prediction, lineups] = await Promise.all([
       getSentiment(fixtureId),
       getPrediction(fixtureId),

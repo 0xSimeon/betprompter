@@ -1,14 +1,13 @@
 /**
  * Supported bet market types
- * Limited to: Match Result, Double Chance, Over 1.5, Over 2.5
+ * Per ENGINE_SPEC: Only these 4 markets are allowed
  */
 
 export type MarketType =
   | "MATCH_RESULT"
   | "DOUBLE_CHANCE"
   | "OVER_1_5"
-  | "OVER_2_5"
-  | "BTTS";
+  | "OVER_2_5";
 
 export interface MarketConfig {
   type: MarketType;
@@ -46,13 +45,6 @@ export const MARKETS: Record<MarketType, MarketConfig> = {
     shortName: "O2.5",
     description: "Total goals over 2.5",
     outcomes: ["Over 2.5", "Under 2.5"],
-  },
-  BTTS: {
-    type: "BTTS",
-    name: "Both Teams to Score",
-    shortName: "BTTS",
-    description: "Both teams will score at least one goal",
-    outcomes: ["Yes", "No"],
   },
 };
 

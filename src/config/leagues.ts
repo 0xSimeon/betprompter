@@ -20,7 +20,7 @@ export const LEAGUES: Record<string, LeagueConfig> = {
     code: "EPL",
     country: "England",
     footballDataId: 2021,
-    polymarketId: 2,
+    polymarketId: 10188, // Correct series ID from /sports endpoint
     bigTeams: [
       "Arsenal FC",
       "Chelsea FC",
@@ -36,7 +36,7 @@ export const LEAGUES: Record<string, LeagueConfig> = {
     code: "LALIGA",
     country: "Spain",
     footballDataId: 2014,
-    polymarketId: 3,
+    polymarketId: 10193, // Correct series ID from /sports endpoint
     bigTeams: [
       "Real Madrid CF",
       "FC Barcelona",
@@ -51,7 +51,7 @@ export const LEAGUES: Record<string, LeagueConfig> = {
     code: "BL1",
     country: "Germany",
     footballDataId: 2002,
-    polymarketId: 7,
+    polymarketId: 10194, // Correct series ID from /sports endpoint
     bigTeams: [
       "FC Bayern München",
       "Borussia Dortmund",
@@ -65,7 +65,7 @@ export const LEAGUES: Record<string, LeagueConfig> = {
     code: "SA",
     country: "Italy",
     footballDataId: 2019,
-    polymarketId: 12,
+    polymarketId: 10203, // Correct series ID from /sports endpoint
     bigTeams: [
       "Juventus FC",
       "FC Internazionale Milano",
@@ -81,13 +81,35 @@ export const LEAGUES: Record<string, LeagueConfig> = {
     code: "FL1",
     country: "France",
     footballDataId: 2015,
-    polymarketId: 11,
+    polymarketId: 10195, // Correct series ID from /sports endpoint
     bigTeams: [
       "Paris Saint-Germain FC",
       "AS Monaco FC",
       "Olympique de Marseille",
       "Olympique Lyonnais",
       "LOSC Lille",
+    ],
+  },
+  // Per ENGINE_SPEC: Champions League is a supported competition
+  UCL: {
+    id: "ucl",
+    name: "UEFA Champions League",
+    code: "CL",
+    country: "Europe",
+    footballDataId: 2001,
+    polymarketId: 10204, // Correct series ID from /sports endpoint
+    bigTeams: [
+      "Real Madrid CF",
+      "FC Barcelona",
+      "FC Bayern München",
+      "Manchester City FC",
+      "Liverpool FC",
+      "Paris Saint-Germain FC",
+      "FC Internazionale Milano",
+      "Juventus FC",
+      "Arsenal",
+      "Chelsea FC",
+      "Manchester City FC",
     ],
   },
 };

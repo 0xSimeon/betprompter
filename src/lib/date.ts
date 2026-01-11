@@ -215,6 +215,22 @@ export function getUpcomingWeekDates(): string[] {
 }
 
 /**
+ * Get rolling 2-week window dates (today + next 13 days)
+ * Per ENGINE_SPEC: fixtures are fetched for a rolling 2-week window
+ * @returns Array of 14 date strings starting from today
+ */
+export function getRollingTwoWeekDates(): string[] {
+  const today = getTodayGMT1();
+  const dates: string[] = [];
+
+  for (let i = 0; i < 14; i++) {
+    dates.push(addDays(today, i));
+  }
+
+  return dates;
+}
+
+/**
  * Get a human-readable label for a date relative to today
  * e.g., "Today", "Tomorrow", "Wed, 8 Jan"
  */

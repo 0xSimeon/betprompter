@@ -15,6 +15,7 @@ import {
   getFixture,
   getPrediction,
   appendToHistory,
+  getMonthlyHistory,
   getStats,
   setStats,
   setJobLastRun,
@@ -41,7 +42,6 @@ function initializeStats(): StatsAggregate {
       DOUBLE_CHANCE: { total: 0, wins: 0, losses: 0, pushes: 0 },
       OVER_1_5: { total: 0, wins: 0, losses: 0, pushes: 0 },
       OVER_2_5: { total: 0, wins: 0, losses: 0, pushes: 0 },
-      BTTS: { total: 0, wins: 0, losses: 0, pushes: 0 },
     },
     lastUpdated: nowGMT1(),
   };
@@ -109,10 +109,22 @@ export async function GET(request: NextRequest) {
       stats = initializeStats();
     }
 
+    // Per ENGINE_SPEC: History is append-only, cron jobs must be idempotent
+    // Load existing history to check for duplicates
+    const existingHistory = await getMonthlyHistory(yearMonth);
+    const alreadySettled = new Set(existingHistory?.map((o) => o.fixtureId) || []);
+
     let settled = 0;
+    let skippedDuplicates = 0;
     const results: Array<{ match: string; result: OutcomeResult }> = [];
 
     for (const fixtureId of selectedIds) {
+      // Skip if already settled (idempotency)
+      if (alreadySettled.has(fixtureId)) {
+        skippedDuplicates++;
+        continue;
+      }
+
       const fixture = await getFixture(fixtureId);
       if (!fixture) continue;
 
@@ -177,6 +189,7 @@ export async function GET(request: NextRequest) {
       success: true,
       date: today,
       settled,
+      skippedDuplicates,
       results,
       stats: {
         total: stats.total,

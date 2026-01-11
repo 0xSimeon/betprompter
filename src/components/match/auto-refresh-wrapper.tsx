@@ -10,6 +10,7 @@ interface AutoRefreshWrapperProps {
   fixtureId: number;
   kickoff: string;
   lineupsAvailable: boolean;
+  hasAnalysis: boolean;
   children: React.ReactNode;
 }
 
@@ -24,6 +25,7 @@ export function AutoRefreshWrapper({
   fixtureId,
   kickoff,
   lineupsAvailable,
+  hasAnalysis,
   children,
 }: AutoRefreshWrapperProps) {
   const router = useRouter();
@@ -33,17 +35,25 @@ export function AutoRefreshWrapper({
   useEffect(() => {
     const minsUntil = minutesUntilKickoff(kickoff);
 
-    // Only auto-refresh if within 55 min window and lineups not available
-    if (minsUntil <= 55 && minsUntil > 0 && !lineupsAvailable) {
+    // Auto-refresh conditions:
+    // 1. If no analysis exists yet (first visit) - always fetch
+    // 2. If within 55 min window and lineups not available
+    // 3. Skip if match already started (minsUntil <= 0)
+    const needsAnalysis = !hasAnalysis;
+    const needsLineups = minsUntil <= 55 && minsUntil > 0 && !lineupsAvailable;
+    const shouldRefresh = (needsAnalysis || needsLineups) && minsUntil > 0;
+
+    if (shouldRefresh) {
       setStatus("refreshing");
 
       fetch(`/api/match/${fixtureId}/refresh`)
         .then((res) => res.json())
         .then((data: RefreshResult) => {
-          if (data.lineupsUpdated || data.analysisUpdated) {
+          if (data.lineupsUpdated || data.analysisUpdated || data.sentimentUpdated) {
             const messages: string[] = [];
+            if (data.sentimentUpdated) messages.push("Market data loaded");
+            if (data.analysisUpdated) messages.push("Analysis generated");
             if (data.lineupsUpdated) messages.push("Lineups fetched");
-            if (data.analysisUpdated) messages.push("Analysis updated");
             setUpdateMessage(messages.join(" • "));
             setStatus("updated");
             router.refresh();
@@ -55,7 +65,7 @@ export function AutoRefreshWrapper({
           setStatus("error");
         });
     }
-  }, [fixtureId, kickoff, lineupsAvailable, router]);
+  }, [fixtureId, kickoff, lineupsAvailable, hasAnalysis, router]);
 
   return (
     <>
@@ -64,7 +74,7 @@ export function AutoRefreshWrapper({
         <Alert className="bg-blue-500/10 border-blue-500/20 mb-4">
           <Loader2 className="h-4 w-4 animate-spin text-blue-400" />
           <AlertDescription className="text-blue-400 ml-2">
-            Checking for lineups and updating analysis...
+            Loading market data and generating analysis...
           </AlertDescription>
         </Alert>
       )}

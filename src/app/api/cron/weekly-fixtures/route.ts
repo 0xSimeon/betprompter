@@ -1,17 +1,22 @@
 /**
- * Weekly Fixtures Cron Job
- * Schedule: Sunday 22:00 GMT+1 (21:00 UTC)
+ * Fixtures Ingestion Cron Job
+ * Per ENGINE_SPEC: Fetches fixtures for a rolling 2-week window
  *
- * 1. Fetch fixtures for upcoming week (Mon-Sun)
- * 2. For each day: filter to selected fixtures
- * 3. Fetch sentiment for each selected fixture
- * 4. Generate AI analysis (without lineups)
- * 5. Generate predictions
- * 6. Store all in KV
+ * Schedule: Sunday 22:00 GMT+1 (21:00 UTC)
+ * Modes:
+ *   - default/rolling: 14-day window (today + 13 days)
+ *   - current: current week only (Mon-Sun)
+ *   - upcoming: next week only (Mon-Sun)
+ *
+ * 1. Fetch fixtures for each day in the window
+ * 2. Fetch Polymarket sentiment for each fixture
+ * 3. Generate AI analysis (without lineups)
+ * 4. Generate predictions
+ * 5. Store all in KV
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { getUpcomingWeekDates, getCurrentWeekDates, nowGMT1 } from "@/lib/date";
+import { getUpcomingWeekDates, getCurrentWeekDates, getRollingTwoWeekDates, nowGMT1 } from "@/lib/date";
 import {
   setDailyFixtures,
   setFixture,
@@ -26,9 +31,11 @@ import {
   fetchSentimentForFixture,
   generateAnalysis,
   filterSelectedFixtures,
-  generatePrediction,
+  generateEnginePrediction,
+  scoreAllMarkets,
+  DAILY_BET_CAP,
 } from "@/services";
-import type { Fixture, MarketSentiment } from "@/types";
+import type { Fixture, MarketSentiment, Prediction } from "@/types";
 
 const CRON_SECRET = process.env.CRON_SECRET || "";
 
@@ -45,23 +52,34 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Use ?current=true to fetch current week instead of upcoming week
-  const fetchCurrentWeek = request.nextUrl.searchParams.get("current") === "true";
-  const weekDates = fetchCurrentWeek ? getCurrentWeekDates() : getUpcomingWeekDates();
-  console.log(`[Weekly Fixtures] Starting job for week: ${weekDates[0]} to ${weekDates[6]}`);
+  // Per ENGINE_SPEC: rolling 2-week window is the default
+  // Use ?mode=current for current week, ?mode=upcoming for next week
+  const mode = request.nextUrl.searchParams.get("mode") || "rolling";
+
+  let dates: string[];
+  if (mode === "current") {
+    dates = getCurrentWeekDates();
+  } else if (mode === "upcoming") {
+    dates = getUpcomingWeekDates();
+  } else {
+    // Default: rolling 2-week window (today + 13 days)
+    dates = getRollingTwoWeekDates();
+  }
+
+  console.log(`[Fixtures] Starting job for ${dates.length} days: ${dates[0]} to ${dates[dates.length - 1]}`);
 
   const results: DayResult[] = [];
   let totalFixtures = 0;
   let totalSelected = 0;
 
   try {
-    // Process each day of the week
-    for (const date of weekDates) {
-      console.log(`[Weekly Fixtures] Processing ${date}...`);
+    // Process each day in the date range
+    for (const date of dates) {
+      console.log(`[Fixtures] Processing ${date}...`);
 
       // Step 1: Fetch fixtures for this day
       const fixtures = await fetchFixturesByDate(date);
-      console.log(`[Weekly Fixtures] ${date}: Found ${fixtures.length} fixtures`);
+      console.log(`[Fixtures] ${date}: Found ${fixtures.length} fixtures`);
 
       if (fixtures.length === 0) {
         results.push({ date, total: 0, selected: 0 });
@@ -89,13 +107,14 @@ export async function GET(request: NextRequest) {
         await setSentiment(sentiment);
       }
 
-      // Store all fixture IDs (we now analyze all fixtures)
-      await setSelectedFixtures(
-        date,
-        fixtures.map((f: Fixture) => f.id)
-      );
-
       // Step 3: Generate AI analysis and predictions for ALL fixtures
+      // Collect predictions with scores for daily cap enforcement
+      const dayPredictions: Array<{
+        fixture: Fixture;
+        prediction: Prediction;
+        topScore: number;
+      }> = [];
+
       for (const fixture of fixtures) {
         const sentiment = sentimentMap.get(fixture.id) || null;
 
@@ -103,40 +122,65 @@ export async function GET(request: NextRequest) {
         const analysis = await generateAnalysis(fixture, sentiment, null);
         await setAnalysis(analysis);
 
-        // Generate prediction
-        const prediction = generatePrediction(fixture, sentiment, analysis);
+        // Generate prediction using ENGINE_SPEC scoring model
+        const prediction = generateEnginePrediction(fixture, sentiment, analysis);
         await setPrediction(prediction);
 
+        // Get top score for ranking
+        const scores = scoreAllMarkets(fixture, sentiment, analysis);
+        const topScore = scores.length > 0 ? scores[0].finalScore : 0;
+
+        dayPredictions.push({ fixture, prediction, topScore });
+
         console.log(
-          `[Weekly Fixtures] ${date}: ${fixture.homeTeam.shortName} vs ${fixture.awayTeam.shortName} → ${prediction.category}`
+          `[Fixtures] ${date}: ${fixture.homeTeam.shortName} vs ${fixture.awayTeam.shortName} → ${prediction.category}`
         );
       }
 
+      // Per ENGINE_SPEC: Apply daily cap (max 5 bets per calendar day)
+      // Sort by top score descending and take top 5
+      const rankedPredictions = dayPredictions
+        .filter(({ topScore }) => topScore >= 40) // MIN_SCORE_THRESHOLD
+        .sort((a, b) => b.topScore - a.topScore)
+        .slice(0, DAILY_BET_CAP);
+
+      // Store only the selected fixture IDs for the day
+      await setSelectedFixtures(
+        date,
+        rankedPredictions.map(({ fixture }) => fixture.id)
+      );
+
       totalFixtures += fixtures.length;
-      totalSelected += fixtures.length;
+      totalSelected += rankedPredictions.length;
       results.push({
         date,
         total: fixtures.length,
-        selected: fixtures.length,
+        selected: rankedPredictions.length,
       });
+
+      console.log(
+        `[Fixtures] ${date}: Selected ${rankedPredictions.length}/${fixtures.length} fixtures (daily cap: ${DAILY_BET_CAP})`
+      );
     }
 
     // Mark job as complete
-    await setJobLastRun("weekly-fixtures", nowGMT1());
+    await setJobLastRun("fixtures-ingestion", nowGMT1());
 
     const response = {
       success: true,
-      weekStart: weekDates[0],
-      weekEnd: weekDates[6],
+      mode,
+      dateStart: dates[0],
+      dateEnd: dates[dates.length - 1],
+      daysProcessed: dates.length,
       totalFixtures,
       totalSelected,
       byDay: results,
     };
 
-    console.log("[Weekly Fixtures] Job completed:", response);
+    console.log("[Fixtures] Job completed:", response);
     return NextResponse.json(response);
   } catch (error) {
-    console.error("[Weekly Fixtures] Job failed:", error);
+    console.error("[Fixtures] Job failed:", error);
     return NextResponse.json(
       { error: "Job failed", details: String(error) },
       { status: 500 }

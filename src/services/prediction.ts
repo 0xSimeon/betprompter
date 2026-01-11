@@ -8,7 +8,16 @@ import {
   BANKER_PROBABILITY_THRESHOLD,
   VALUE_PROBABILITY_MIN,
 } from "@/config/constants";
-import { nowGMT1 } from "@/lib/date";
+import { nowGMT1, getTodayGMT1, formatYearMonthGMT1 } from "@/lib/date";
+import {
+  getFixture,
+  getPrediction,
+  appendToHistory,
+  getStats,
+  setStats,
+  getMonthlyHistory,
+} from "@/lib/kv";
+import { fetchFinalScore } from "./football-data";
 import type {
   Fixture,
   MarketSentiment,
@@ -16,6 +25,9 @@ import type {
   Prediction,
   PredictionCategory,
   MarketSelection,
+  Outcome,
+  StatsAggregate,
+  OutcomeResult,
 } from "@/types";
 
 /**
@@ -169,9 +181,15 @@ function classifyPrediction(
   const marketProb = getMarketProbForLean(aiLean, sentiment);
   const { hasEdge, edgePercent } = calculateEV(aiProb, marketProb);
 
+  // Per ENGINE_SPEC: Use Gemini flags for risk assessment
+  const geminiClean = !geminiVerification.overconfidence &&
+                      !geminiVerification.missingContext &&
+                      geminiVerification.cautionLevel === "none";
+  const geminiAcceptable = geminiVerification.cautionLevel !== "strong";
+
   // No market data cases - rely solely on AI
   if (!hasMarketData) {
-    if (aiConfidence === "HIGH" && aiProb >= 0.65 && geminiVerification.passed) {
+    if (aiConfidence === "HIGH" && aiProb >= 0.65 && geminiClean) {
       return "VALUE"; // Strong AI conviction without market data
     }
     if (aiConfidence === "MEDIUM" && aiProb >= 0.55) {
@@ -187,13 +205,13 @@ function classifyPrediction(
   // - AI agrees (alignment >= 0)
   // - AI has high probability estimate (>=60%)
   // - Sufficient volume (liquidity)
-  // - Gemini verification passed
+  // - No strong Gemini caution
   if (
     topOutcome.probability >= 0.65 &&
     alignment >= 0 &&
     aiProb >= 0.60 &&
     volume >= 500 &&
-    geminiVerification.passed
+    geminiAcceptable
   ) {
     return "BANKER";
   }
@@ -203,7 +221,7 @@ function classifyPrediction(
     aiProb >= 0.70 &&
     alignment === 1 && // AI agrees with market leader
     aiConfidence === "HIGH" &&
-    geminiVerification.passed
+    geminiClean
   ) {
     return "BANKER";
   }
@@ -211,7 +229,7 @@ function classifyPrediction(
   // VALUE: AI sees positive edge over market (>5% edge)
   if (hasEdge && edgePercent >= 5) {
     // AI thinks this outcome is undervalued by market
-    if (aiConfidence !== "LOW" && geminiVerification.passed) {
+    if (aiConfidence !== "LOW" && geminiAcceptable) {
       return "VALUE";
     }
   }
@@ -335,8 +353,91 @@ function buildAlternativeMarket(
 }
 
 /**
+ * Build all market tips from AI probabilities
+ * Per ENGINE_SPEC: Only ML, DC, O1.5, O2.5 are supported
+ */
+function buildAllMarkets(
+  sentiment: MarketSentiment | null,
+  analysis: AIAnalysis,
+  primaryMarket: MarketSelection | null
+): MarketSelection[] {
+  const markets: MarketSelection[] = [];
+  const probs = analysis.groqAnalysis.probabilities;
+  if (!probs) return markets;
+
+  const primaryType = primaryMarket?.type;
+
+  // Helper to get market probability from sentiment
+  const getMarketProb = (
+    marketType: string,
+    outcome: string
+  ): number | null => {
+    if (!sentiment?.available) return null;
+    const market = sentiment.markets.find((m) => m.type === marketType);
+    const found = market?.outcomes.find((o) =>
+      o.name.toLowerCase().includes(outcome.toLowerCase())
+    );
+    return found ? Math.round(found.probability * 100) : null;
+  };
+
+  // Over 1.5 Goals (skip if it's the primary market)
+  if (primaryType !== "OVER_1_5" && probs.over15 >= 0.45) {
+    const marketProb = getMarketProb("OVER_1_5", "over");
+    markets.push({
+      type: "OVER_1_5",
+      selection: "Over 1.5",
+      confidence: Math.round(probs.over15 * 100),
+      reasoning: marketProb
+        ? `AI: ${Math.round(probs.over15 * 100)}% vs Market: ${marketProb}%`
+        : `AI estimates ${Math.round(probs.over15 * 100)}% chance`,
+    });
+  }
+
+  // Over 2.5 Goals (skip if it's the primary market)
+  if (primaryType !== "OVER_2_5" && probs.over25 >= 0.40) {
+    const marketProb = getMarketProb("OVER_2_5", "over");
+    markets.push({
+      type: "OVER_2_5",
+      selection: "Over 2.5",
+      confidence: Math.round(probs.over25 * 100),
+      reasoning: marketProb
+        ? `AI: ${Math.round(probs.over25 * 100)}% vs Market: ${marketProb}%`
+        : `AI estimates ${Math.round(probs.over25 * 100)}% chance`,
+    });
+  }
+
+  // Per ENGINE_SPEC: BTTS is not a supported market - removed
+
+  // Double Chance based on AI lean (skip if it's the primary or alternative market)
+  const lean = analysis.groqAnalysis.lean;
+  if (primaryType !== "DOUBLE_CHANCE") {
+    if (lean === "HOME" && probs.homeWin >= 0.35) {
+      const combinedProb = probs.homeWin + probs.draw;
+      markets.push({
+        type: "DOUBLE_CHANCE",
+        selection: "1X",
+        confidence: Math.round(combinedProb * 100),
+        reasoning: `Home or Draw covers ${Math.round(combinedProb * 100)}% of outcomes`,
+      });
+    } else if (lean === "AWAY" && probs.awayWin >= 0.35) {
+      const combinedProb = probs.awayWin + probs.draw;
+      markets.push({
+        type: "DOUBLE_CHANCE",
+        selection: "X2",
+        confidence: Math.round(combinedProb * 100),
+        reasoning: `Away or Draw covers ${Math.round(combinedProb * 100)}% of outcomes`,
+      });
+    }
+  }
+
+  // Sort by confidence descending
+  return markets.sort((a, b) => b.confidence - a.confidence);
+}
+
+/**
  * Generate disclaimers based on analysis
  * For RISKY picks, these become the "Why Risky?" reasons
+ * Per ENGINE_SPEC: Uses Gemini risk flags
  */
 function generateDisclaimers(
   analysis: AIAnalysis,
@@ -349,13 +450,19 @@ function generateDisclaimers(
     disclaimers.push(...analysis.groqAnalysis.concerns);
   }
 
-  // Add Gemini flags
-  if (analysis.geminiVerification.overconfidenceFlags.length > 0) {
-    disclaimers.push("Analysis may overstate confidence.");
+  // Add Gemini risk flags per ENGINE_SPEC
+  if (analysis.geminiVerification.overconfidence) {
+    disclaimers.push(
+      analysis.geminiVerification.overconfidenceReason ||
+        "Analysis may overstate confidence."
+    );
   }
 
-  if (analysis.geminiVerification.missingContext.length > 0) {
-    disclaimers.push("Some contextual factors may be missing.");
+  if (analysis.geminiVerification.missingContext) {
+    disclaimers.push(
+      analysis.geminiVerification.missingContextReason ||
+        "Some contextual factors may be missing."
+    );
   }
 
   // Category-specific reasons
@@ -371,8 +478,8 @@ function generateDisclaimers(
     if (analysis.groqAnalysis.lean === "NEUTRAL") {
       disclaimers.push("No clear directional edge identified.");
     }
-    if (!analysis.geminiVerification.passed) {
-      disclaimers.push("Verification flagged potential issues with analysis.");
+    if (analysis.geminiVerification.cautionLevel === "strong") {
+      disclaimers.push("Strong caution flagged by risk review.");
     }
     // Ensure we always have at least one reason for RISKY
     if (disclaimers.length === 0) {
@@ -398,6 +505,7 @@ export function generatePrediction(
     analysis,
     primaryMarket
   );
+  const allMarkets = buildAllMarkets(sentiment, analysis, primaryMarket);
   const disclaimers = generateDisclaimers(analysis, category);
 
   return {
@@ -406,6 +514,7 @@ export function generatePrediction(
     category,
     primaryMarket,
     alternativeMarket,
+    allMarkets,
     narrative: analysis.groqAnalysis.narrative,
     keyFactors: analysis.groqAnalysis.keyFactors,
     disclaimers,
@@ -446,12 +555,147 @@ export function evaluatePrediction(
       if (total > 2.5) return "WIN";
       return "LOSS";
 
-    case "BTTS":
-      if (selection === "Yes" && home > 0 && away > 0) return "WIN";
-      if (selection === "No" && (home === 0 || away === 0)) return "WIN";
-      return "LOSS";
+    // Per ENGINE_SPEC: BTTS is not a supported market
 
     default:
       return "VOID";
   }
+}
+
+/**
+ * Initialize empty stats aggregate
+ */
+function initializeStats(): StatsAggregate {
+  return {
+    total: 0,
+    wins: 0,
+    losses: 0,
+    pushes: 0,
+    voids: 0,
+    byCategory: {
+      banker: { total: 0, wins: 0, losses: 0, pushes: 0 },
+      value: { total: 0, wins: 0, losses: 0, pushes: 0 },
+      risky: { total: 0, wins: 0, losses: 0, pushes: 0 },
+    },
+    byMarket: {
+      MATCH_RESULT: { total: 0, wins: 0, losses: 0, pushes: 0 },
+      DOUBLE_CHANCE: { total: 0, wins: 0, losses: 0, pushes: 0 },
+      OVER_1_5: { total: 0, wins: 0, losses: 0, pushes: 0 },
+      OVER_2_5: { total: 0, wins: 0, losses: 0, pushes: 0 },
+    },
+    lastUpdated: nowGMT1(),
+  };
+}
+
+/**
+ * Update stats aggregate with an outcome
+ */
+function updateStats(
+  stats: StatsAggregate,
+  outcome: Outcome,
+  result: OutcomeResult
+): void {
+  stats.total++;
+
+  if (result === "WIN") stats.wins++;
+  else if (result === "LOSS") stats.losses++;
+  else if (result === "PUSH") stats.pushes++;
+  else if (result === "VOID") stats.voids++;
+
+  // Update by category
+  const category = outcome.prediction.category.toLowerCase() as "banker" | "value" | "risky";
+  if (stats.byCategory[category]) {
+    stats.byCategory[category].total++;
+    if (result === "WIN") stats.byCategory[category].wins++;
+    else if (result === "LOSS") stats.byCategory[category].losses++;
+    else if (result === "PUSH") stats.byCategory[category].pushes++;
+  }
+
+  // Update by market
+  const marketType = outcome.prediction.marketType;
+  if (stats.byMarket[marketType]) {
+    stats.byMarket[marketType].total++;
+    if (result === "WIN") stats.byMarket[marketType].wins++;
+    else if (result === "LOSS") stats.byMarket[marketType].losses++;
+    else if (result === "PUSH") stats.byMarket[marketType].pushes++;
+  }
+
+  stats.lastUpdated = nowGMT1();
+}
+
+/**
+ * Settle a single match - called when a match finishes
+ * Returns settlement result or null if match cannot be settled
+ */
+export async function settleMatch(fixtureId: number): Promise<{
+  settled: boolean;
+  result?: OutcomeResult;
+  alreadySettled?: boolean;
+}> {
+  const fixture = await getFixture(fixtureId);
+  if (!fixture || fixture.status !== "FINISHED") {
+    return { settled: false };
+  }
+
+  const prediction = await getPrediction(fixtureId);
+  if (!prediction?.primaryMarket) {
+    return { settled: false };
+  }
+
+  // Check if already settled (avoid duplicates)
+  const today = getTodayGMT1();
+  const yearMonth = formatYearMonthGMT1(new Date());
+  const existingHistory = await getMonthlyHistory(yearMonth);
+  const alreadySettled = existingHistory?.some(
+    (o) => o.fixtureId === fixtureId
+  );
+
+  if (alreadySettled) {
+    return { settled: false, alreadySettled: true };
+  }
+
+  // Fetch final score from API
+  const finalScore = await fetchFinalScore(fixtureId);
+  if (!finalScore) {
+    return { settled: false };
+  }
+
+  // Evaluate prediction
+  const result = evaluatePrediction(prediction, finalScore);
+
+  // Build outcome record
+  const outcome: Outcome = {
+    id: `${fixtureId}-${today}`,
+    date: today,
+    fixtureId,
+    leagueCode: fixture.leagueCode,
+    homeTeam: fixture.homeTeam.name,
+    awayTeam: fixture.awayTeam.name,
+    prediction: {
+      category: prediction.category,
+      marketType: prediction.primaryMarket.type,
+      selection: prediction.primaryMarket.selection,
+      confidence: prediction.primaryMarket.confidence,
+    },
+    finalScore,
+    result,
+    settledAt: nowGMT1(),
+  };
+
+  // Save to history
+  await appendToHistory(yearMonth, outcome);
+
+  // Update stats
+  let stats = await getStats();
+  if (!stats) {
+    stats = initializeStats();
+  }
+  updateStats(stats, outcome, result);
+  await setStats(stats);
+
+  console.log(
+    `[Settlement] Auto-settled ${fixture.homeTeam.shortName} vs ${fixture.awayTeam.shortName}: ${result} (${finalScore.home}-${finalScore.away})`
+  );
+
+  return { settled: true, result };
 }

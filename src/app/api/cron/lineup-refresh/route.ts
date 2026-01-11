@@ -27,7 +27,7 @@ import {
   refreshSentimentPrices,
   generateAnalysis,
   shouldRegenerateAnalysis,
-  generatePrediction,
+  generateEnginePrediction,
 } from "@/services";
 
 const CRON_SECRET = process.env.CRON_SECRET || "";
@@ -91,7 +91,7 @@ export async function GET(request: NextRequest) {
         const newAnalysis = await generateAnalysis(fixture, sentiment, lineups);
         await setAnalysis(newAnalysis);
 
-        const newPrediction = generatePrediction(fixture, sentiment, newAnalysis);
+        const newPrediction = generateEnginePrediction(fixture, sentiment, newAnalysis);
         await setPrediction(newPrediction);
       }
 

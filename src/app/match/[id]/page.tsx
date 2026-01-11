@@ -3,6 +3,7 @@ import { getMatchDetail } from "@/lib/kv";
 import {
   MatchHeader,
   AnalysisCard,
+  AllMarketsDisplay,
   MarketSentimentDisplay,
   LineupsPanel,
   AutoRefreshWrapper,
@@ -31,6 +32,7 @@ export default async function MatchPage({ params }: MatchPageProps) {
   }
 
   const lineupsAvailable = match.lineups?.available ?? false;
+  const hasAnalysis = !!match.analysis;
 
   return (
     <div className="container mx-auto px-4 py-6 max-w-5xl">
@@ -38,6 +40,7 @@ export default async function MatchPage({ params }: MatchPageProps) {
         fixtureId={fixtureId}
         kickoff={match.kickoff}
         lineupsAvailable={lineupsAvailable}
+        hasAnalysis={hasAnalysis}
       >
         <div className="space-y-6">
           {/* Status and Refresh Row */}
@@ -74,6 +77,14 @@ export default async function MatchPage({ params }: MatchPageProps) {
               prediction={match.prediction}
             />
           </div>
+
+          {/* Other Market Tips - Full width below */}
+          {match.prediction?.allMarkets && match.prediction.allMarkets.length > 0 && (
+            <AllMarketsDisplay
+              markets={match.prediction.allMarkets}
+              sentiment={match.sentiment}
+            />
+          )}
 
           {/* Lineups - Full width below */}
           {match.lineups && (

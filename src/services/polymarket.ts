@@ -1,9 +1,11 @@
 /**
  * Polymarket API integration
- * Uses Gamma API for market discovery and CLOB API for prices
+ * Uses Gamma API with series_id for match discovery
+ * Uses CLOB API for live prices
  */
 
 import { API_URLS } from "@/config/constants";
+import { getLeagueByCode } from "@/config/leagues";
 import { nowGMT1 } from "@/lib/date";
 import type { MarketSentiment, Market, MarketOutcome } from "@/types";
 import type { MarketType } from "@/config/markets";
@@ -20,10 +22,10 @@ interface PolymarketEvent {
 interface PolymarketMarket {
   id: string;
   question: string;
-  outcomes: string;  // JSON string like "[\"Yes\", \"No\"]"
-  outcomePrices: string;  // JSON string like "[\"0.705\", \"0.295\"]"
+  outcomes: string; // JSON string like "[\"Yes\", \"No\"]"
+  outcomePrices: string; // JSON string like "[\"0.705\", \"0.295\"]"
   volume: string;
-  clobTokenIds?: string;  // JSON string with token IDs
+  clobTokenIds?: string; // JSON string with token IDs
   sportsMarketType?: string;
 }
 
@@ -31,264 +33,58 @@ interface CloBPrice {
   price: string;
 }
 
-// League slug prefixes for Polymarket events
-const LEAGUE_SLUG_PREFIX: Record<string, string> = {
-  PL: "epl",
-  PD: "laliga",
-  BL1: "bundesliga",
-  SA: "serie-a",
-  FL1: "ligue-1",
-};
-
-// Team name abbreviations for Polymarket slugs
-const TEAM_ABBREVIATIONS: Record<string, string> = {
-  // Premier League
-  "Arsenal FC": "ars",
-  "Arsenal": "ars",
-  "Liverpool FC": "liv",
-  "Liverpool": "liv",
-  "Manchester City FC": "mac",
-  "Manchester City": "mac",
-  "Man City": "mac",
-  "Brighton & Hove Albion FC": "bri",
-  "Brighton": "bri",
-  "Chelsea FC": "che",
-  "Chelsea": "che",
-  "Manchester United FC": "mau",
-  "Manchester United": "mau",
-  "Man United": "mau",
-  "Tottenham Hotspur FC": "tot",
-  "Tottenham": "tot",
-  "Spurs": "tot",
-  "Newcastle United FC": "new",
-  "Newcastle": "new",
-  "Aston Villa FC": "avl",
-  "Aston Villa": "avl",
-  "West Ham United FC": "whu",
-  "West Ham": "whu",
-  "Nottingham Forest FC": "nfo",
-  "Nottingham Forest": "nfo",
-  "Fulham FC": "ful",
-  "Fulham": "ful",
-  "Bournemouth": "bou",
-  "AFC Bournemouth": "bou",
-  "Crystal Palace FC": "cry",
-  "Crystal Palace": "cry",
-  "Brentford FC": "bre",
-  "Brentford": "bre",
-  "Everton FC": "eve",
-  "Everton": "eve",
-  "Wolverhampton Wanderers FC": "wol",
-  "Wolves": "wol",
-  "Leicester City FC": "lei",
-  "Leicester": "lei",
-  "Ipswich Town FC": "ips",
-  "Ipswich": "ips",
-  "Southampton FC": "sou",
-  "Southampton": "sou",
-  // La Liga
-  "Real Madrid CF": "rma",
-  "Real Madrid": "rma",
-  "FC Barcelona": "bar",
-  "Barcelona": "bar",
-  "Atletico Madrid": "atm",
-  "Atlético de Madrid": "atm",
-  "Sevilla FC": "sev",
-  "Sevilla": "sev",
-  "Real Sociedad de Fútbol": "rso",
-  "Real Sociedad": "rso",
-  "Real Betis Balompié": "bet",
-  "Real Betis": "bet",
-  "Betis": "bet",
-  "Villarreal CF": "vil",
-  "Villarreal": "vil",
-  "Athletic Club": "ath",
-  "Athletic Bilbao": "ath",
-  "Valencia CF": "val",
-  "Valencia": "val",
-  "CA Osasuna": "osa",
-  "Osasuna": "osa",
-  "RC Celta de Vigo": "cel",
-  "Celta Vigo": "cel",
-  "Celta": "cel",
-  "Getafe CF": "get",
-  "Getafe": "get",
-  "Girona FC": "gir",
-  "Girona": "gir",
-  "Rayo Vallecano de Madrid": "ray",
-  "Rayo Vallecano": "ray",
-  "RCD Mallorca": "mal",
-  "Mallorca": "mal",
-  "UD Las Palmas": "lpa",
-  "Las Palmas": "lpa",
-  "Deportivo Alavés": "ala",
-  "Alavés": "ala",
-  "RCD Espanyol de Barcelona": "esp",
-  "Espanyol": "esp",
-  "CD Leganés": "leg",
-  "Leganés": "leg",
-  "Real Valladolid CF": "vld",
-  "Valladolid": "vld",
-  // Bundesliga
-  "FC Bayern München": "bay",
-  "Bayern Munich": "bay",
-  "Bayern": "bay",
-  "Borussia Dortmund": "dor",
-  "Dortmund": "dor",
-  "BVB": "dor",
-  "RB Leipzig": "rbl",
-  "Leipzig": "rbl",
-  "Bayer 04 Leverkusen": "lev",
-  "Leverkusen": "lev",
-  "VfL Wolfsburg": "wol",
-  "Wolfsburg": "wol",
-  "Eintracht Frankfurt": "fra",
-  "Frankfurt": "fra",
-  "VfB Stuttgart": "stu",
-  "Stuttgart": "stu",
-  "SC Freiburg": "fre",
-  "Freiburg": "fre",
-  "1. FC Union Berlin": "fcub",
-  "Union Berlin": "fcub",
-  "TSG 1899 Hoffenheim": "hof",
-  "Hoffenheim": "hof",
-  "1. FSV Mainz 05": "mai",
-  "Mainz": "mai",
-  "Borussia Mönchengladbach": "bmg",
-  "Gladbach": "bmg",
-  "SV Werder Bremen": "wer",
-  "Werder Bremen": "wer",
-  "FC Augsburg": "aug",
-  "Augsburg": "aug",
-  "VfL Bochum 1848": "boc",
-  "Bochum": "boc",
-  "1. FC Heidenheim 1846": "hei",
-  "Heidenheim": "hei",
-  "FC St. Pauli": "stp",
-  "St. Pauli": "stp",
-  "Holstein Kiel": "kie",
-  "Kiel": "kie",
-  // Serie A
-  "Juventus FC": "juv",
-  "Juventus": "juv",
-  "Inter Milan": "int",
-  "FC Internazionale Milano": "int",
-  "AC Milan": "acm",
-  "Milan": "acm",
-  "SSC Napoli": "nap",
-  "Napoli": "nap",
-  "AS Roma": "rom",
-  "Roma": "rom",
-  "SS Lazio": "laz",
-  "Lazio": "laz",
-  "Atalanta BC": "ata",
-  "Atalanta": "ata",
-  "ACF Fiorentina": "fio",
-  "Fiorentina": "fio",
-  "Bologna FC 1909": "bol",
-  "Bologna": "bol",
-  "Torino FC": "tor",
-  "Torino": "tor",
-  "Udinese Calcio": "udi",
-  "Udinese": "udi",
-  "Genoa CFC": "gen",
-  "Genoa": "gen",
-  "Cagliari Calcio": "cag",
-  "Cagliari": "cag",
-  "Parma Calcio 1913": "par",
-  "Parma": "par",
-  "Empoli FC": "emp",
-  "Empoli": "emp",
-  "US Lecce": "lec",
-  "Lecce": "lec",
-  "Como 1907": "com",
-  "Como": "com",
-  "Hellas Verona FC": "ver",
-  "Verona": "ver",
-  "Venezia FC": "ven",
-  "Venezia": "ven",
-  "AC Monza": "mza",
-  "Monza": "mza",
-  "US Sassuolo Calcio": "sas",
-  "Sassuolo": "sas",
-  // Ligue 1
-  "Paris Saint-Germain FC": "psg",
-  "Paris Saint-Germain": "psg",
-  "PSG": "psg",
-  "AS Monaco FC": "asm",
-  "Monaco": "asm",
-  "Olympique de Marseille": "mar",
-  "Marseille": "mar",
-  "Olympique Lyonnais": "lyo",
-  "Lyon": "lyo",
-  "LOSC Lille": "lil",
-  "Lille OSC": "lil",
-  "Lille": "lil",
-  "OGC Nice": "nic",
-  "Nice": "nic",
-  "RC Lens": "len",
-  "Lens": "len",
-  "Stade Rennais FC 1901": "ren",
-  "Rennes": "ren",
-  "Stade Brestois 29": "bre",
-  "Brest": "bre",
-  "RC Strasbourg Alsace": "str",
-  "Strasbourg": "str",
-  "Toulouse FC": "tou",
-  "Toulouse": "tou",
-  "FC Nantes": "nan",
-  "Nantes": "nan",
-  "AJ Auxerre": "aux",
-  "Auxerre": "aux",
-  "Angers SCO": "ang",
-  "Angers": "ang",
-  "Stade de Reims": "rei",
-  "Reims": "rei",
-  "Le Havre AC": "leh",
-  "Le Havre": "leh",
-  "AS Saint-Étienne": "ste",
-  "Saint-Étienne": "ste",
-  "Montpellier HSC": "mpl",
-  "Montpellier": "mpl",
-};
-
 /**
- * Get team abbreviation for Polymarket slug
+ * Normalize team name for fuzzy matching
  */
-function getTeamAbbrev(teamName: string): string {
-  // Check exact match first
-  if (TEAM_ABBREVIATIONS[teamName]) {
-    return TEAM_ABBREVIATIONS[teamName];
-  }
-
-  // Try partial match
-  const lowerName = teamName.toLowerCase();
-  for (const [key, abbrev] of Object.entries(TEAM_ABBREVIATIONS)) {
-    if (lowerName.includes(key.toLowerCase()) || key.toLowerCase().includes(lowerName)) {
-      return abbrev;
-    }
-  }
-
-  // Fallback: first 3 chars of first word
-  return teamName.split(/\s+/)[0].slice(0, 3).toLowerCase();
+function normalizeTeamName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/fc|cf|sc|ac|as|ss|rb|1\.|afc/gi, "")
+    .replace(/[^a-z]/g, "")
+    .trim();
 }
 
 /**
- * Construct Polymarket event slug for a fixture
+ * Check if event title matches fixture teams
  */
-function constructEventSlug(
-  leagueCode: string,
+function eventMatchesFixture(
+  eventTitle: string,
   homeTeam: string,
-  awayTeam: string,
-  kickoffDate: string
-): string {
-  const prefix = LEAGUE_SLUG_PREFIX[leagueCode] || leagueCode.toLowerCase();
-  const homeAbbrev = getTeamAbbrev(homeTeam);
-  const awayAbbrev = getTeamAbbrev(awayTeam);
-  // Extract date from ISO string (e.g., "2026-01-07T20:00:00+01:00" -> "2026-01-07")
-  const date = kickoffDate.split("T")[0];
+  awayTeam: string
+): boolean {
+  const normalizedTitle = normalizeTeamName(eventTitle);
+  const normalizedHome = normalizeTeamName(homeTeam);
+  const normalizedAway = normalizeTeamName(awayTeam);
 
-  return `${prefix}-${homeAbbrev}-${awayAbbrev}-${date}`;
+  // Check if both team names appear in the event title
+  return (
+    normalizedTitle.includes(normalizedHome) &&
+    normalizedTitle.includes(normalizedAway)
+  );
+}
+
+/**
+ * Fetch events from Polymarket by series_id
+ */
+async function fetchEventsBySeries(seriesId: number): Promise<PolymarketEvent[]> {
+  try {
+    const url = `${API_URLS.POLYMARKET_GAMMA}/events?series_id=${seriesId}&active=true&closed=false&_limit=50`;
+    console.log(`[Polymarket] Fetching events: ${url}`);
+
+    const response = await fetch(url, {
+      next: { revalidate: 0 },
+    });
+
+    if (!response.ok) {
+      console.error(`Polymarket API error: ${response.status}`);
+      return [];
+    }
+
+    return response.json();
+  } catch (error) {
+    console.error("Failed to fetch Polymarket events:", error);
+    return [];
+  }
 }
 
 /**
@@ -297,7 +93,7 @@ function constructEventSlug(
 async function fetchEventBySlug(slug: string): Promise<PolymarketEvent | null> {
   try {
     const url = `${API_URLS.POLYMARKET_GAMMA}/events?slug=${slug}`;
-    console.log(`[Polymarket] Fetching: ${url}`);
+    console.log(`[Polymarket] Fetching by slug: ${url}`);
 
     const response = await fetch(url, {
       next: { revalidate: 0 },
@@ -352,8 +148,9 @@ function inferMarketType(question: string, sportsMarketType?: string): MarketTyp
     if (q.includes("2.5")) return "OVER_2_5";
     if (q.includes("1.5")) return "OVER_1_5";
   }
+  // Per ENGINE_SPEC: BTTS is not a supported market - skip it
   if (sportsMarketType === "btts") {
-    return "BTTS";
+    return null;
   }
 
   const q = question.toLowerCase();
@@ -367,22 +164,24 @@ function inferMarketType(question: string, sportsMarketType?: string): MarketTyp
   }
 
   // Goals markets
-  if (q.includes("over 2.5") || q.includes("more than 2.5") || q.includes("2.5+ goals") || q.includes("3 or more")) {
+  if (
+    q.includes("over 2.5") ||
+    q.includes("more than 2.5") ||
+    q.includes("2.5+ goals") ||
+    q.includes("3 or more")
+  ) {
     return "OVER_2_5";
   }
-  if (q.includes("over 1.5") || q.includes("more than 1.5") || q.includes("1.5+ goals") || q.includes("2 or more")) {
+  if (
+    q.includes("over 1.5") ||
+    q.includes("more than 1.5") ||
+    q.includes("1.5+ goals") ||
+    q.includes("2 or more")
+  ) {
     return "OVER_1_5";
   }
 
-  // BTTS detection
-  if (q.includes("both teams") && q.includes("score")) {
-    return "BTTS";
-  }
-  if (q.includes("btts")) {
-    return "BTTS";
-  }
-
-  // Double Chance - less common on Polymarket but check anyway
+  // Double Chance
   if (q.includes("double chance") || q.includes("not lose")) {
     return "DOUBLE_CHANCE";
   }
@@ -437,7 +236,11 @@ function mapPolymarketMarket(pmMarket: PolymarketMarket): Market | null {
  * Combine multiple moneyline markets into a single MATCH_RESULT market
  * Polymarket has separate markets for "Home Win", "Draw", "Away Win"
  */
-function combineMoneylineMarkets(markets: Market[], homeTeam: string, awayTeam: string): Market | null {
+function combineMoneylineMarkets(
+  markets: Market[],
+  homeTeam: string,
+  awayTeam: string
+): Market | null {
   const moneylineMarkets = markets.filter(
     (m) => m.type === "MATCH_RESULT" && m.outcomes.length === 2
   );
@@ -457,11 +260,15 @@ function combineMoneylineMarkets(markets: Market[], homeTeam: string, awayTeam: 
     const q = market.question.toLowerCase();
     let outcomeName = "Unknown";
 
+    const normalizedHome = normalizeTeamName(homeTeam);
+    const normalizedAway = normalizeTeamName(awayTeam);
+    const normalizedQ = normalizeTeamName(q);
+
     if (q.includes("draw")) {
       outcomeName = "Draw";
-    } else if (q.includes(homeTeam.toLowerCase()) || q.includes(getTeamAbbrev(homeTeam))) {
+    } else if (normalizedQ.includes(normalizedHome)) {
       outcomeName = `${homeTeam} Win`;
-    } else if (q.includes(awayTeam.toLowerCase()) || q.includes(getTeamAbbrev(awayTeam))) {
+    } else if (normalizedQ.includes(normalizedAway)) {
       outcomeName = `${awayTeam} Win`;
     }
 
@@ -493,20 +300,10 @@ export async function fetchSentimentForFixture(
   kickoffDate?: string
 ): Promise<MarketSentiment> {
   try {
-    // Construct the expected slug
-    const slug = constructEventSlug(
-      leagueCode,
-      homeTeam,
-      awayTeam,
-      kickoffDate || new Date().toISOString()
-    );
-    console.log(`[Polymarket] Looking for event: ${slug}`);
-
-    // Fetch event by slug
-    const event = await fetchEventBySlug(slug);
-
-    if (!event) {
-      console.log(`[Polymarket] No event found for slug: ${slug}`);
+    // Get league config for polymarketId
+    const league = getLeagueByCode(leagueCode);
+    if (!league || league.polymarketId === 0) {
+      console.log(`[Polymarket] No polymarketId for league ${leagueCode}`);
       return {
         fixtureId,
         polymarketEventId: null,
@@ -516,11 +313,38 @@ export async function fetchSentimentForFixture(
       };
     }
 
-    console.log(`[Polymarket] Found event: ${event.title} with ${event.markets.length} markets`);
+    // Fetch all events for this league series
+    const events = await fetchEventsBySeries(league.polymarketId);
+    console.log(`[Polymarket] Found ${events.length} events for series ${league.polymarketId}`);
+
+    // Find event matching our fixture
+    let matchedEvent: PolymarketEvent | null = null;
+    for (const event of events) {
+      if (eventMatchesFixture(event.title, homeTeam, awayTeam)) {
+        matchedEvent = event;
+        console.log(`[Polymarket] Matched event: ${event.title} (${event.slug})`);
+        break;
+      }
+    }
+
+    if (!matchedEvent) {
+      console.log(`[Polymarket] No event found for ${homeTeam} vs ${awayTeam}`);
+      return {
+        fixtureId,
+        polymarketEventId: null,
+        available: false,
+        fetchedAt: nowGMT1(),
+        markets: [],
+      };
+    }
+
+    console.log(
+      `[Polymarket] Found event: ${matchedEvent.title} with ${matchedEvent.markets.length} markets`
+    );
 
     // Map individual markets
     const rawMarkets: Market[] = [];
-    for (const pmMarket of event.markets) {
+    for (const pmMarket of matchedEvent.markets) {
       const market = mapPolymarketMarket(pmMarket);
       if (market) {
         rawMarkets.push(market);
@@ -535,7 +359,7 @@ export async function fetchSentimentForFixture(
       markets.push(combinedMatchResult);
     }
 
-    // Add any non-moneyline markets (BTTS, Over/Under, etc.)
+    // Add any non-moneyline markets (Over/Under, Double Chance)
     for (const market of rawMarkets) {
       if (market.type !== "MATCH_RESULT") {
         markets.push(market);
@@ -544,7 +368,7 @@ export async function fetchSentimentForFixture(
 
     return {
       fixtureId,
-      polymarketEventId: event.id,
+      polymarketEventId: matchedEvent.id,
       available: markets.length > 0,
       fetchedAt: nowGMT1(),
       markets,

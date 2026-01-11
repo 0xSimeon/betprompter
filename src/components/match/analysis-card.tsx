@@ -29,7 +29,7 @@ function getAIProbForSelection(
   if (selectionLower.includes("draw")) return Math.round(probs.draw * 100);
   if (selectionLower.includes("over") && selectionLower.includes("2.5")) return Math.round(probs.over25 * 100);
   if (selectionLower.includes("over") && selectionLower.includes("1.5")) return Math.round(probs.over15 * 100);
-  if (selectionLower.includes("btts") || selectionLower.includes("both")) return Math.round(probs.btts * 100);
+  // Per ENGINE_SPEC: BTTS is not a supported market
 
   return null;
 }

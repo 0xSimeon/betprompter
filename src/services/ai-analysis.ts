@@ -48,6 +48,10 @@ function buildGroqPrompt(
   sentiment: MarketSentiment | null,
   lineups: Lineups | null
 ): string {
+  // Calculate total market volume for guidance
+  const totalVolume = sentiment?.markets.reduce((sum, m) => sum + m.volume, 0) || 0;
+  const volumeSignal = totalVolume > 10000 ? "HIGH" : totalVolume > 1000 ? "MODERATE" : "LOW";
+
   let prompt = `Analyze this football match and provide betting insights.
 
 MATCH: ${fixture.homeTeam.name} vs ${fixture.awayTeam.name}
@@ -58,7 +62,7 @@ VENUE: ${fixture.venue || "Unknown"}
 
   if (sentiment?.available && sentiment.markets.length > 0) {
     prompt += `
-MARKET SENTIMENT (Polymarket):
+POLYMARKET DATA (${volumeSignal} LIQUIDITY - $${totalVolume.toLocaleString()} total):
 `;
     for (const market of sentiment.markets) {
       prompt += `${market.question}\n`;
@@ -67,108 +71,128 @@ MARKET SENTIMENT (Polymarket):
       }
       prompt += `  Volume: $${market.volume.toLocaleString()}\n`;
     }
+
+    prompt += `
+POLYMARKET INTERPRETATION:
+- ${volumeSignal === "HIGH" ? "HIGH liquidity markets are VERY reliable. Respect these odds unless you have strong evidence to disagree." : volumeSignal === "MODERATE" ? "MODERATE liquidity - reasonably reliable market signal." : "LOW liquidity - less reliable, rely more on your analysis."}
+- If market shows >65% for an outcome, the crowd strongly favors it
+- VALUE opportunity: Your estimate differs from market by >10%
+- If you DISAGREE with the market, you MUST explain WHY in your narrative
+`;
   } else {
     prompt += `
-MARKET SENTIMENT: Not available for this fixture.
+MARKET SENTIMENT: Not available. Rely on your football knowledge.
 `;
   }
 
   if (lineups?.available) {
     prompt += `
-LINEUPS AVAILABLE: Yes
+LINEUPS CONFIRMED:
 Home formation: ${lineups.home?.formation || "Unknown"}
 Away formation: ${lineups.away?.formation || "Unknown"}
+Factor confirmed lineups into your analysis - key players present/absent matters.
 `;
   }
 
   prompt += `
-TASK:
-You are an expert football analyst. Provide a betting analysis with PROBABILITY ESTIMATES.
+YOUR TASK:
+You are an expert football analyst with encyclopedic knowledge. Generate a betting analysis.
 
-USE YOUR KNOWLEDGE:
-- Team strengths, recent form (last 5 matches), playing styles
-- Managerial changes, key injuries, suspensions
-- Home/away performance patterns, head-to-head records
-- Tactical matchups, motivation (title race, relegation battle, cup focus)
+USE YOUR KNOWLEDGE OF:
+- Team form (last 5 matches), playing styles, home/away records
+- Manager tactics, key injuries, suspensions
+- Head-to-head history, motivation factors
+- League position, recent results
 
-COMPARE WITH POLYMARKET (if available):
-- If your probability differs from market by >10%, that's a potential VALUE bet
-- High volume markets (>$10k) are more reliable signals
-- Note if you agree or disagree with market sentiment
+CLASSIFICATION GUIDANCE:
+- BANKER picks: You AND market agree (>60%), high confidence
+- VALUE picks: Your probability > market by >10% (you see edge they don't)
+- RISKY: Low confidence, conflicting signals, uncertain outcomes
 
-OUTPUT REQUIREMENTS:
-1. Narrative: 2-3 sentences explaining your KEY ANGLE
-2. Key Factors: 3-5 SPECIFIC factors (actual stats, news, not generic)
-3. Lean: HOME, DRAW, or AWAY
-4. Confidence: HIGH (>70% certain), MEDIUM (55-70%), LOW (<55%)
-5. Suggested Market & Outcome
-6. Concerns: Specific risks
-7. PROBABILITIES: Your estimated probability for EACH outcome (must sum correctly)
+CRITICAL RULES:
+1. Be SPECIFIC in keyFactors - cite actual stats, players, recent results
+2. Narrative must explain your EDGE or ANGLE, not just describe the match
+3. If market favors an outcome >65% and you agree, say so
+4. If you disagree with market, explain your reasoning
+5. ALWAYS suggest a specific bet - never say "avoid" or "skip"
 
 Respond in this EXACT JSON format:
 {
-  "narrative": "string",
-  "keyFactors": ["string", "string", ...],
+  "narrative": "string - explain your KEY ANGLE, be specific",
+  "keyFactors": ["string - specific factor", "string", ...],
   "lean": "HOME" | "DRAW" | "AWAY",
   "confidence": "HIGH" | "MEDIUM" | "LOW",
-  "suggestedMarket": "MATCH_RESULT" | "DOUBLE_CHANCE" | "OVER_1_5" | "OVER_2_5" | "BTTS",
+  "suggestedMarket": "MATCH_RESULT" | "DOUBLE_CHANCE" | "OVER_1_5" | "OVER_2_5",
   "suggestedOutcome": "string",
-  "concerns": ["string", ...],
+  "concerns": ["string - specific risk", ...],
   "probabilities": {
     "homeWin": 0.xx,
     "draw": 0.xx,
     "awayWin": 0.xx,
     "over15": 0.xx,
-    "over25": 0.xx,
-    "btts": 0.xx
+    "over25": 0.xx
   }
 }
 
-PROBABILITY GUIDELINES:
-- homeWin + draw + awayWin should equal ~1.0
-- Strong favorites at home: 55-75% win probability
-- Evenly matched: 30-40% each for home/away, 25-30% draw
-- Be realistic - even dominant teams rarely exceed 80%`;
+PROBABILITY RULES:
+- homeWin + draw + awayWin must equal ~1.0
+- Strong home favorites: 55-75%
+- Evenly matched: 30-40% home/away, 25-30% draw
+- Dominant teams rarely exceed 75-80% even at home
+- Be calibrated - don't inflate probabilities without evidence`;
 
   return prompt;
 }
 
 /**
- * Build prompt for Gemini verification
+ * Build prompt for Gemini risk challenger
+ * Per ENGINE_SPEC: Gemini only returns risk flags, no decisions
  */
 function buildGeminiPrompt(
   fixture: Fixture,
   groqAnalysis: GroqAnalysis,
   sentiment: MarketSentiment | null
 ): string {
-  return `Review this AI-generated football analysis for quality and accuracy.
+  // Build market context
+  let marketContext = "";
+  if (sentiment?.available && sentiment.markets.length > 0) {
+    marketContext = "POLYMARKET DATA:\n";
+    for (const market of sentiment.markets) {
+      for (const outcome of market.outcomes) {
+        marketContext += `${outcome.name}: ${(outcome.probability * 100).toFixed(1)}%\n`;
+      }
+    }
+  }
+
+  return `You are a RISK CHALLENGER. Review this football betting analysis and flag concerns.
 
 MATCH: ${fixture.homeTeam.name} vs ${fixture.awayTeam.name}
 
-ANALYSIS:
-Narrative: ${groqAnalysis.narrative}
-Lean: ${groqAnalysis.lean}
-Confidence: ${groqAnalysis.confidence}
-Suggested: ${groqAnalysis.suggestedMarket} - ${groqAnalysis.suggestedOutcome}
-Key Factors: ${groqAnalysis.keyFactors.join(", ")}
+${marketContext}
 
-${sentiment?.available ? `Market probability for suggested outcome: Check against sentiment data.` : "No market data available."}
+ANALYSIS TO REVIEW:
+- Narrative: ${groqAnalysis.narrative}
+- Lean: ${groqAnalysis.lean}
+- Confidence: ${groqAnalysis.confidence}
+- Suggested: ${groqAnalysis.suggestedMarket} - ${groqAnalysis.suggestedOutcome}
+- Key Factors: ${groqAnalysis.keyFactors.join("; ")}
+- Concerns listed: ${groqAnalysis.concerns.join("; ") || "None"}
 
-TASK:
-Identify any issues:
-1. Contradictions in the reasoning
-2. Missing important context
-3. Overconfidence flags (e.g., HIGH confidence without strong supporting factors)
+YOUR TASK - Answer ONLY these questions:
+1. Is this OVERCONFIDENT? (HIGH confidence without strong evidence, or probabilities too extreme)
+2. Is there MISSING CONTEXT? (Important factors ignored like injuries, form, H2H)
+3. Is CAUTION warranted? (none = analysis is solid, mild = minor concerns, strong = major red flags)
 
-Respond in JSON:
+Respond in this EXACT JSON format:
 {
-  "contradictions": ["string", ...],
-  "missingContext": ["string", ...],
-  "overconfidenceFlags": ["string", ...],
-  "passed": boolean
+  "overconfidence": true or false,
+  "overconfidenceReason": "string or null - brief reason if true",
+  "missingContext": true or false,
+  "missingContextReason": "string or null - what's missing if true",
+  "cautionLevel": "none" | "mild" | "strong"
 }
 
-Be critical. Flag anything that seems overconfident or poorly reasoned.`;
+Be skeptical. If confidence seems unjustified, flag it.`;
 }
 
 /**
@@ -243,14 +267,14 @@ async function callGroq(prompt: string): Promise<GroqAnalysis> {
 }
 
 /**
- * Call Gemini API for verification
+ * Call Gemini API for risk flags
+ * Per ENGINE_SPEC: Gemini returns only overconfidence, missingContext, cautionLevel
  */
 async function callGemini(prompt: string): Promise<GeminiVerification> {
   const defaultVerification: GeminiVerification = {
-    contradictions: [],
-    missingContext: [],
-    overconfidenceFlags: [],
-    passed: true,
+    overconfidence: false,
+    missingContext: false,
+    cautionLevel: "none",
   };
 
   if (!GEMINI_API_KEY) {
@@ -274,7 +298,7 @@ async function callGemini(prompt: string): Promise<GeminiVerification> {
           ],
           generationConfig: {
             temperature: 0.2,
-            maxOutputTokens: 2000, // Increased for Gemini 3's internal thinking tokens
+            maxOutputTokens: 2000,
             responseMimeType: "application/json",
           },
         }),
@@ -295,11 +319,18 @@ async function callGemini(prompt: string): Promise<GeminiVerification> {
 
     const parsed = JSON.parse(content);
 
+    // Validate cautionLevel
+    const validCautionLevels = ["none", "mild", "strong"];
+    const cautionLevel = validCautionLevels.includes(parsed.cautionLevel)
+      ? parsed.cautionLevel
+      : "none";
+
     return {
-      contradictions: parsed.contradictions || [],
-      missingContext: parsed.missingContext || [],
-      overconfidenceFlags: parsed.overconfidenceFlags || [],
-      passed: parsed.passed !== false,
+      overconfidence: Boolean(parsed.overconfidence),
+      missingContext: Boolean(parsed.missingContext),
+      cautionLevel,
+      overconfidenceReason: parsed.overconfidenceReason || undefined,
+      missingContextReason: parsed.missingContextReason || undefined,
     };
   } catch (error) {
     console.error("Gemini API call failed:", error);
@@ -348,3 +379,5 @@ export function shouldRegenerateAnalysis(
   const newHash = generateInputHash(fixture, sentiment, lineups);
   return existing.inputHash !== newHash;
 }
+
+

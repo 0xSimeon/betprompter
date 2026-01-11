@@ -109,21 +109,31 @@ export interface GroqAnalysis {
   suggestedOutcome: string | null;
   concerns: string[];
   // Probability estimates from AI (0-1)
+  // Per ENGINE_SPEC: Only 4 markets allowed (ML, DC, O1.5, O2.5)
   probabilities?: {
     homeWin: number;
     draw: number;
     awayWin: number;
     over15: number;
     over25: number;
-    btts: number;
   };
 }
 
+/**
+ * Per ENGINE_SPEC: Gemini outputs risk flags only
+ * - overconfidence: true/false
+ * - missingContext: true/false
+ * - cautionLevel: none | mild | strong
+ */
+export type CautionLevel = "none" | "mild" | "strong";
+
 export interface GeminiVerification {
-  contradictions: string[];
-  missingContext: string[];
-  overconfidenceFlags: string[];
-  passed: boolean;
+  overconfidence: boolean;
+  missingContext: boolean;
+  cautionLevel: CautionLevel;
+  // Legacy fields for backwards compatibility with UI
+  overconfidenceReason?: string;
+  missingContextReason?: string;
 }
 
 export interface AIAnalysis {
@@ -153,6 +163,7 @@ export interface Prediction {
   category: PredictionCategory;
   primaryMarket: MarketSelection | null;
   alternativeMarket: MarketSelection | null;
+  allMarkets: MarketSelection[]; // All computed market tips
   narrative: string;
   keyFactors: string[];
   disclaimers: string[];
