@@ -11,7 +11,7 @@ Claude must read this file at the start of every session and update it before st
 ## Current Status
 
 ### Last Updated
-2026-01-11 20:30 (GMT+1)
+2026-01-12 01:30 (GMT+1)
 
 ---
 
@@ -120,11 +120,49 @@ Claude must read this file at the start of every session and update it before st
 - Verified dev build runs successfully
 
 ### In Progress
-- Git commit and push blocked due to Claude rate limit
+- None
 
 ### Next Tasks
-- Follow DEVOPS_WORKFLOW.md to:
-  - Commit changes
-  - Push to origin/main
-  - Verify Vercel deployment
+- Test daily-fixtures cron in production
+- Monitor API call efficiency (should be ~15/day after initial run)
 - Sanity-check HISTORY page after first full settlement cycle
+
+---
+
+## Update – 2026-01-12: Cron Simplification & UI Fixes
+
+### UI/UX Fixes
+- **"Check Lineups" button** → Renamed to "Refresh Data" (was confusing)
+- **Mobile responsiveness** → Added hamburger menu, fixed horizontal scrolling
+- **Team logo alignment** → Fixed widths and min-heights for consistent alignment
+- **"Other Markets" Polymarket matching** → Fixed Yes/No outcome mapping for Over/Under markets
+- **Polymarket TTL** → Extended from 30 min to 48 hours (data was disappearing)
+
+### Cron Job Consolidation (Option C: Incremental + 48hr Refresh)
+**Removed:**
+- `lineup-refresh` cron (not needed)
+- `weekly-fixtures` cron (consolidated into daily)
+
+**Simplified to 2 crons:**
+| Cron | Schedule | What it does |
+|------|----------|--------------|
+| `daily-fixtures` | 04:00 UTC (05:00 GMT+1) | Fetches 2-week rolling window, analyzes NEW + 48hr fixtures |
+| `settlement` | 23:00 UTC (00:00 GMT+1) | Settles all finished matches once per day |
+
+**Daily Cron Logic:**
+```
+if (!existingAnalysis) → NEW fixture → Always analyze
+else if (hoursUntil <= 48) → REFRESH → Re-analyze for fresh Polymarket
+else → SKIP → Keep existing analysis
+```
+
+**Efficiency:**
+- Day 1: ~70 API calls (initial 2-week window)
+- Day 2+: ~15 API calls (5 new + 10 refresh)
+
+### New Endpoints
+- `GET /api/refresh-all` - Manual trigger to refresh all fixtures
+
+### Bug Fixes
+- Added default probabilities to AI fallback (was returning 30% risky when Groq failed)
+- Added `hoursUntilKickoff()` function to date.ts

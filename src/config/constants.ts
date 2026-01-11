@@ -23,7 +23,7 @@ export const KV_TTL = {
   FIXTURES_DAILY: 24 * 60 * 60, // 24 hours
   FIXTURE_SINGLE: 48 * 60 * 60, // 48 hours
   LINEUPS: 24 * 60 * 60, // 24 hours
-  SENTIMENT: 30 * 60, // 30 minutes
+  SENTIMENT: 48 * 60 * 60, // 48 hours - persist through prematch
   ANALYSIS: 24 * 60 * 60, // Until kickoff, but max 24h
   PREDICTION: 48 * 60 * 60, // 48 hours
 } as const;

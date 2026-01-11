@@ -199,6 +199,7 @@ Be skeptical. If confidence seems unjustified, flag it.`;
  * Call Groq API for analysis
  */
 async function callGroq(prompt: string): Promise<GroqAnalysis> {
+  // Default analysis with probabilities so engine can still score
   const defaultAnalysis: GroqAnalysis = {
     narrative: "Unable to generate detailed analysis due to limited data.",
     keyFactors: ["Insufficient data for comprehensive analysis"],
@@ -207,6 +208,13 @@ async function callGroq(prompt: string): Promise<GroqAnalysis> {
     suggestedMarket: "MATCH_RESULT",
     suggestedOutcome: "Home Win",
     concerns: ["AI analysis unavailable - defaulting to home advantage"],
+    probabilities: {
+      homeWin: 0.40,
+      draw: 0.30,
+      awayWin: 0.30,
+      over15: 0.65,
+      over25: 0.45,
+    },
   };
 
   if (!GROQ_API_KEY) {

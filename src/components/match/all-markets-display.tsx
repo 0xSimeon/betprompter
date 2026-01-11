@@ -12,6 +12,7 @@ interface AllMarketsDisplayProps {
 
 /**
  * Get market probability for a specific selection from sentiment
+ * Handles Polymarket's "Yes"/"No" outcomes for Over/Under markets
  */
 function getMarketProbForSelection(
   sentiment: MarketSentiment | null | undefined,
@@ -24,9 +25,32 @@ function getMarketProbForSelection(
   if (!market) return null;
 
   const selectionLower = selection.toLowerCase();
+
+  // For Over/Under markets, Polymarket uses "Yes"/"No" outcomes
+  // Map "Over X.X" selections to "Yes", "Under X.X" to "No"
+  if (marketType === "OVER_2_5" || marketType === "OVER_1_5") {
+    const isOverSelection = selectionLower.includes("over");
+    const targetOutcome = isOverSelection ? "yes" : "no";
+    const outcome = market.outcomes.find(
+      (o) => o.name.toLowerCase() === targetOutcome
+    );
+    if (outcome) {
+      return Math.round(outcome.probability * 100);
+    }
+  }
+
+  // For Match Result, try direct matching
   const outcome = market.outcomes.find((o) => {
     const nameLower = o.name.toLowerCase();
-    return nameLower.includes(selectionLower) || selectionLower.includes(nameLower);
+    // Check for exact or partial matches
+    return (
+      nameLower.includes(selectionLower) ||
+      selectionLower.includes(nameLower) ||
+      // Handle "Home Win" vs team name matching
+      (selectionLower.includes("home") && nameLower.includes("win") && !nameLower.includes("away")) ||
+      (selectionLower.includes("away") && nameLower.includes("win") && !nameLower.includes("home")) ||
+      (selectionLower.includes("draw") && nameLower.includes("draw"))
+    );
   });
 
   return outcome ? Math.round(outcome.probability * 100) : null;

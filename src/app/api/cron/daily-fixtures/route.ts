@@ -2,22 +2,30 @@
  * Daily Fixtures Cron Job
  * Schedule: 05:00 GMT+1 daily (04:00 UTC)
  *
- * 1. Fetch fixtures for today
- * 2. Filter to selected fixtures
- * 3. Fetch sentiment for each
- * 4. Generate AI analysis
- * 5. Generate predictions
- * 6. Store all in KV
+ * Implements Option C: Incremental + Near-Term Refresh
+ *
+ * 1. Fetch fixtures for rolling 2-week window
+ * 2. Identify NEW fixtures (not in KV)
+ * 3. Identify fixtures within 48 hours (need fresh data)
+ * 4. Run analysis for NEW + 48-hour fixtures only
+ * 5. Keep existing analysis for fixtures 3+ days away
+ * 6. Apply daily cap (max 5 per day)
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { getTodayGMT1, nowGMT1 } from "@/lib/date";
+import { getRollingTwoWeekDates, nowGMT1, hoursUntilKickoff } from "@/lib/date";
 import {
+  getDailyFixtures,
   setDailyFixtures,
+  getFixture,
   setFixture,
+  getSelectedFixtures,
   setSelectedFixtures,
+  getSentiment,
   setSentiment,
+  getAnalysis,
   setAnalysis,
+  getPrediction,
   setPrediction,
   setJobLastRun,
 } from "@/lib/kv";
@@ -25,15 +33,25 @@ import {
   fetchFixturesByDate,
   fetchSentimentForFixture,
   generateAnalysis,
-  filterSelectedFixtures,
   generateEnginePrediction,
   scoreAllMarkets,
   DAILY_BET_CAP,
 } from "@/services";
 import type { Fixture, MarketSentiment, Prediction } from "@/types";
 
-// Verify cron secret to prevent unauthorized access
 const CRON_SECRET = process.env.CRON_SECRET || "";
+
+// Fixtures within this window get refreshed (hours before kickoff)
+const REFRESH_WINDOW_HOURS = 48;
+
+interface DayResult {
+  date: string;
+  total: number;
+  new: number;
+  refreshed: number;
+  skipped: number;
+  selected: number;
+}
 
 export async function GET(request: NextRequest) {
   // Verify authorization
@@ -42,112 +60,189 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const today = getTodayGMT1();
-  console.log(`[Daily Fixtures] Starting job for ${today}`);
+  const dates = getRollingTwoWeekDates();
+  console.log(`[Daily Cron] Starting for ${dates.length} days: ${dates[0]} to ${dates[dates.length - 1]}`);
+
+  const results: DayResult[] = [];
+  let totalNew = 0;
+  let totalRefreshed = 0;
+  let totalSkipped = 0;
+  let totalSelected = 0;
 
   try {
-    // Step 1: Fetch all fixtures
-    console.log("[Daily Fixtures] Fetching fixtures from Football-Data.org...");
-    const fixtures = await fetchFixturesByDate(today);
-    console.log(`[Daily Fixtures] Found ${fixtures.length} fixtures`);
+    for (const date of dates) {
+      console.log(`[Daily Cron] Processing ${date}...`);
 
-    if (fixtures.length === 0) {
-      await setJobLastRun("daily-fixtures", nowGMT1());
-      return NextResponse.json({
-        success: true,
-        date: today,
-        total: 0,
-        selected: 0,
-        message: "No fixtures today",
+      // Step 1: Fetch fixtures for this day from API
+      const apiFixtures = await fetchFixturesByDate(date);
+
+      if (apiFixtures.length === 0) {
+        results.push({ date, total: 0, new: 0, refreshed: 0, skipped: 0, selected: 0 });
+        continue;
+      }
+
+      // Store fixtures list for this day
+      await setDailyFixtures(date, apiFixtures);
+
+      // Step 2: Categorize fixtures
+      const newFixtures: Fixture[] = [];
+      const refreshFixtures: Fixture[] = [];
+      const skipFixtures: Fixture[] = [];
+
+      for (const fixture of apiFixtures) {
+        // Store/update the fixture record
+        await setFixture(fixture);
+
+        // Skip finished matches
+        if (["FINISHED", "POSTPONED", "CANCELLED", "SUSPENDED"].includes(fixture.status)) {
+          skipFixtures.push(fixture);
+          continue;
+        }
+
+        // Check if we already have analysis for this fixture
+        const existingAnalysis = await getAnalysis(fixture.id);
+        const hoursUntil = hoursUntilKickoff(fixture.kickoff);
+
+        if (!existingAnalysis) {
+          // NEW fixture - never analyzed
+          newFixtures.push(fixture);
+        } else if (hoursUntil <= REFRESH_WINDOW_HOURS && hoursUntil > 0) {
+          // Within 48-hour window - needs refresh for fresh Polymarket data
+          refreshFixtures.push(fixture);
+        } else {
+          // Existing fixture, not in refresh window - skip
+          skipFixtures.push(fixture);
+        }
+      }
+
+      console.log(`[Daily Cron] ${date}: ${newFixtures.length} new, ${refreshFixtures.length} refresh, ${skipFixtures.length} skip`);
+
+      // Step 3: Process NEW fixtures (always analyze)
+      const dayPredictions: Array<{
+        fixture: Fixture;
+        prediction: Prediction;
+        topScore: number;
+      }> = [];
+
+      for (const fixture of newFixtures) {
+        const sentiment = await fetchSentimentForFixture(
+          fixture.id,
+          fixture.homeTeam.name,
+          fixture.awayTeam.name,
+          fixture.leagueCode,
+          fixture.kickoff
+        );
+        await setSentiment(sentiment);
+
+        const analysis = await generateAnalysis(fixture, sentiment, null);
+        await setAnalysis(analysis);
+
+        const prediction = generateEnginePrediction(fixture, sentiment, analysis);
+        await setPrediction(prediction);
+
+        const scores = scoreAllMarkets(fixture, sentiment, analysis);
+        const topScore = scores.length > 0 ? scores[0].finalScore : 0;
+
+        dayPredictions.push({ fixture, prediction, topScore });
+
+        console.log(`[Daily Cron] NEW: ${fixture.homeTeam.shortName} vs ${fixture.awayTeam.shortName} → ${prediction.category}`);
+      }
+
+      // Step 4: Process REFRESH fixtures (within 48 hours)
+      for (const fixture of refreshFixtures) {
+        const sentiment = await fetchSentimentForFixture(
+          fixture.id,
+          fixture.homeTeam.name,
+          fixture.awayTeam.name,
+          fixture.leagueCode,
+          fixture.kickoff
+        );
+        await setSentiment(sentiment);
+
+        const analysis = await generateAnalysis(fixture, sentiment, null);
+        await setAnalysis(analysis);
+
+        const prediction = generateEnginePrediction(fixture, sentiment, analysis);
+        await setPrediction(prediction);
+
+        const scores = scoreAllMarkets(fixture, sentiment, analysis);
+        const topScore = scores.length > 0 ? scores[0].finalScore : 0;
+
+        dayPredictions.push({ fixture, prediction, topScore });
+
+        console.log(`[Daily Cron] REFRESH: ${fixture.homeTeam.shortName} vs ${fixture.awayTeam.shortName} → ${prediction.category}`);
+      }
+
+      // Step 5: Include SKIPPED fixtures with existing predictions in ranking
+      for (const fixture of skipFixtures) {
+        if (["FINISHED", "POSTPONED", "CANCELLED", "SUSPENDED"].includes(fixture.status)) {
+          continue; // Don't include finished matches
+        }
+
+        const existingPrediction = await getPrediction(fixture.id);
+        if (existingPrediction) {
+          const sentiment = await getSentiment(fixture.id);
+          const analysis = await getAnalysis(fixture.id);
+
+          if (analysis) {
+            const scores = scoreAllMarkets(fixture, sentiment, analysis);
+            const topScore = scores.length > 0 ? scores[0].finalScore : 0;
+            dayPredictions.push({ fixture, prediction: existingPrediction, topScore });
+          }
+        }
+      }
+
+      // Step 6: Apply daily cap (max 5 per day)
+      const rankedPredictions = dayPredictions
+        .filter(({ topScore }) => topScore >= 40) // MIN_SCORE_THRESHOLD
+        .sort((a, b) => b.topScore - a.topScore)
+        .slice(0, DAILY_BET_CAP);
+
+      await setSelectedFixtures(
+        date,
+        rankedPredictions.map(({ fixture }) => fixture.id)
+      );
+
+      // Track results
+      results.push({
+        date,
+        total: apiFixtures.length,
+        new: newFixtures.length,
+        refreshed: refreshFixtures.length,
+        skipped: skipFixtures.length,
+        selected: rankedPredictions.length,
       });
+
+      totalNew += newFixtures.length;
+      totalRefreshed += refreshFixtures.length;
+      totalSkipped += skipFixtures.length;
+      totalSelected += rankedPredictions.length;
+
+      console.log(`[Daily Cron] ${date}: Selected ${rankedPredictions.length} fixtures`);
     }
-
-    // Store all fixtures
-    await setDailyFixtures(today, fixtures);
-    for (const fixture of fixtures) {
-      await setFixture(fixture);
-    }
-
-    // Step 2: Fetch sentiment for each fixture
-    console.log("[Daily Fixtures] Fetching sentiment from Polymarket...");
-    const sentimentMap = new Map<number, MarketSentiment>();
-
-    for (const fixture of fixtures) {
-      const sentiment = await fetchSentimentForFixture(
-        fixture.id,
-        fixture.homeTeam.name,
-        fixture.awayTeam.name,
-        fixture.leagueCode,
-        fixture.kickoff
-      );
-      sentimentMap.set(fixture.id, sentiment);
-      await setSentiment(sentiment);
-    }
-
-    // Step 3: Generate AI analysis and predictions for ALL fixtures
-    // Collect predictions with scores for daily cap enforcement
-    console.log("[Daily Fixtures] Generating AI analysis for all fixtures...");
-
-    const dayPredictions: Array<{
-      fixture: Fixture;
-      prediction: Prediction;
-      topScore: number;
-    }> = [];
-
-    for (const fixture of fixtures) {
-      const sentiment = sentimentMap.get(fixture.id) || null;
-
-      // Generate AI analysis (no lineups yet at daily job time)
-      const analysis = await generateAnalysis(fixture, sentiment, null);
-      await setAnalysis(analysis);
-
-      // Generate prediction using ENGINE_SPEC scoring model
-      const prediction = generateEnginePrediction(fixture, sentiment, analysis);
-      await setPrediction(prediction);
-
-      // Get top score for ranking
-      const scores = scoreAllMarkets(fixture, sentiment, analysis);
-      const topScore = scores.length > 0 ? scores[0].finalScore : 0;
-
-      dayPredictions.push({ fixture, prediction, topScore });
-
-      console.log(
-        `[Daily Fixtures] ${fixture.homeTeam.shortName} vs ${fixture.awayTeam.shortName}: ${prediction.category}`
-      );
-    }
-
-    // Per ENGINE_SPEC: Apply daily cap (max 5 bets per calendar day)
-    // Sort by top score descending and take top 5
-    const rankedPredictions = dayPredictions
-      .filter(({ topScore }) => topScore >= 40) // MIN_SCORE_THRESHOLD
-      .sort((a, b) => b.topScore - a.topScore)
-      .slice(0, DAILY_BET_CAP);
-
-    // Store only the selected fixture IDs for the day
-    await setSelectedFixtures(
-      today,
-      rankedPredictions.map(({ fixture }) => fixture.id)
-    );
-
-    console.log(
-      `[Daily Fixtures] Selected ${rankedPredictions.length}/${fixtures.length} fixtures (daily cap: ${DAILY_BET_CAP})`
-    );
 
     // Mark job as complete
     await setJobLastRun("daily-fixtures", nowGMT1());
 
-    const result = {
+    const response = {
       success: true,
-      date: today,
-      total: fixtures.length,
-      analyzed: fixtures.length,
-      selected: rankedPredictions.length,
+      dateStart: dates[0],
+      dateEnd: dates[dates.length - 1],
+      daysProcessed: dates.length,
+      summary: {
+        new: totalNew,
+        refreshed: totalRefreshed,
+        skipped: totalSkipped,
+        selected: totalSelected,
+        apiCalls: totalNew + totalRefreshed, // Groq + Gemini calls
+      },
+      byDay: results,
     };
 
-    console.log("[Daily Fixtures] Job completed:", result);
-    return NextResponse.json(result);
+    console.log("[Daily Cron] Job completed:", JSON.stringify(response, null, 2));
+    return NextResponse.json(response);
   } catch (error) {
-    console.error("[Daily Fixtures] Job failed:", error);
+    console.error("[Daily Cron] Job failed:", error);
     return NextResponse.json(
       { error: "Job failed", details: String(error) },
       { status: 500 }

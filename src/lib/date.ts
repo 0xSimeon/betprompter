@@ -93,6 +93,15 @@ export function minutesUntilKickoff(kickoffIso: string): number {
 }
 
 /**
+ * Get hours until kickoff
+ */
+export function hoursUntilKickoff(kickoffIso: string): number {
+  const kickoff = new Date(kickoffIso).getTime();
+  const now = Date.now();
+  return Math.floor((kickoff - now) / (1000 * 60 * 60));
+}
+
+/**
  * Check if a fixture is within the lineup refresh window (50-55 min before kickoff)
  */
 export function isInLineupRefreshWindow(kickoffIso: string): boolean {

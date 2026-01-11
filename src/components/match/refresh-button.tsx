@@ -81,7 +81,7 @@ export function RefreshButton({
       {status === "idle" && (
         <>
           <RefreshCw className="h-4 w-4" />
-          {lineupsAvailable ? "Refresh" : "Check Lineups"}
+          Refresh Data
         </>
       )}
     </Button>

@@ -36,10 +36,10 @@ export function MatchHeader({ fixture }: MatchHeaderProps) {
       </div>
 
       {/* Teams display - Enhanced with premium styling */}
-      <div className="flex items-center justify-center gap-6 sm:gap-12 py-8">
+      <div className="flex items-start justify-center gap-4 sm:gap-8 py-6 sm:py-8">
         {/* Home team */}
-        <div className="flex flex-col items-center gap-4 flex-1 max-w-[160px] group">
-          <div className="relative w-24 h-24 sm:w-28 sm:h-28 flex items-center justify-center rounded-2xl bg-gradient-to-br from-secondary/40 to-secondary/20 p-4 shadow-lg shadow-black/10 ring-1 ring-border/30 group-hover:ring-emerald-500/30 transition-all duration-300">
+        <div className="flex flex-col items-center gap-3 w-[100px] sm:w-[140px] group">
+          <div className="relative w-16 h-16 sm:w-24 sm:h-24 flex items-center justify-center rounded-xl sm:rounded-2xl bg-gradient-to-br from-secondary/40 to-secondary/20 p-2 sm:p-4 shadow-lg shadow-black/10 ring-1 ring-border/30 group-hover:ring-emerald-500/30 transition-all duration-300">
             {homeTeam.crest ? (
               <img
                 src={homeTeam.crest}
@@ -47,37 +47,37 @@ export function MatchHeader({ fixture }: MatchHeaderProps) {
                 className="w-full h-full object-contain drop-shadow-lg"
               />
             ) : (
-              <span className="text-3xl font-bold text-muted-foreground">H</span>
+              <span className="text-xl sm:text-3xl font-bold text-muted-foreground">H</span>
             )}
-            <div className="absolute inset-0 rounded-2xl bg-gradient-to-t from-white/0 to-white/5" />
+            <div className="absolute inset-0 rounded-xl sm:rounded-2xl bg-gradient-to-t from-white/0 to-white/5" />
           </div>
-          <span className="font-bold text-center text-base sm:text-lg leading-tight tracking-tight">{homeTeam.name}</span>
+          <span className="font-bold text-center text-xs sm:text-sm leading-tight tracking-tight line-clamp-2 min-h-[2.5rem] sm:min-h-[3rem]">
+            {homeTeam.shortName || homeTeam.name}
+          </span>
         </div>
 
         {/* VS / Score - Enhanced typography */}
-        <div className="flex flex-col items-center px-3">
+        <div className="flex flex-col items-center justify-center px-2 sm:px-4 pt-4 sm:pt-6">
           {hasScore ? (
-            <div className="flex items-center gap-3 tabular-nums">
-              <span className="text-5xl sm:text-6xl font-black bg-gradient-to-br from-foreground to-foreground/60 bg-clip-text text-transparent">
+            <div className="flex items-center gap-2 sm:gap-3 tabular-nums">
+              <span className="text-3xl sm:text-5xl font-black bg-gradient-to-br from-foreground to-foreground/60 bg-clip-text text-transparent">
                 {fixture.score.home}
               </span>
-              <span className="text-3xl text-muted-foreground/50 font-extralight">-</span>
-              <span className="text-5xl sm:text-6xl font-black bg-gradient-to-br from-foreground to-foreground/60 bg-clip-text text-transparent">
+              <span className="text-xl sm:text-3xl text-muted-foreground/50 font-extralight">-</span>
+              <span className="text-3xl sm:text-5xl font-black bg-gradient-to-br from-foreground to-foreground/60 bg-clip-text text-transparent">
                 {fixture.score.away}
               </span>
             </div>
           ) : (
-            <div className="flex flex-col items-center gap-2">
-              <div className="px-6 py-2 rounded-xl bg-secondary/30 border border-border/30">
-                <span className="text-xl font-black text-muted-foreground tracking-[0.3em]">VS</span>
-              </div>
+            <div className="px-4 sm:px-6 py-1.5 sm:py-2 rounded-lg sm:rounded-xl bg-secondary/30 border border-border/30">
+              <span className="text-sm sm:text-xl font-black text-muted-foreground tracking-[0.2em] sm:tracking-[0.3em]">VS</span>
             </div>
           )}
         </div>
 
         {/* Away team */}
-        <div className="flex flex-col items-center gap-4 flex-1 max-w-[160px] group">
-          <div className="relative w-24 h-24 sm:w-28 sm:h-28 flex items-center justify-center rounded-2xl bg-gradient-to-br from-secondary/40 to-secondary/20 p-4 shadow-lg shadow-black/10 ring-1 ring-border/30 group-hover:ring-emerald-500/30 transition-all duration-300">
+        <div className="flex flex-col items-center gap-3 w-[100px] sm:w-[140px] group">
+          <div className="relative w-16 h-16 sm:w-24 sm:h-24 flex items-center justify-center rounded-xl sm:rounded-2xl bg-gradient-to-br from-secondary/40 to-secondary/20 p-2 sm:p-4 shadow-lg shadow-black/10 ring-1 ring-border/30 group-hover:ring-emerald-500/30 transition-all duration-300">
             {awayTeam.crest ? (
               <img
                 src={awayTeam.crest}
@@ -85,11 +85,13 @@ export function MatchHeader({ fixture }: MatchHeaderProps) {
                 className="w-full h-full object-contain drop-shadow-lg"
               />
             ) : (
-              <span className="text-3xl font-bold text-muted-foreground">A</span>
+              <span className="text-xl sm:text-3xl font-bold text-muted-foreground">A</span>
             )}
-            <div className="absolute inset-0 rounded-2xl bg-gradient-to-t from-white/0 to-white/5" />
+            <div className="absolute inset-0 rounded-xl sm:rounded-2xl bg-gradient-to-t from-white/0 to-white/5" />
           </div>
-          <span className="font-bold text-center text-base sm:text-lg leading-tight tracking-tight">{awayTeam.name}</span>
+          <span className="font-bold text-center text-xs sm:text-sm leading-tight tracking-tight line-clamp-2 min-h-[2.5rem] sm:min-h-[3rem]">
+            {awayTeam.shortName || awayTeam.name}
+          </span>
         </div>
       </div>
 
