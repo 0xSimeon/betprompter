@@ -23,13 +23,15 @@ import { nowGMT1 } from "@/lib/date";
 // ============================================================================
 
 /**
- * Base Market Scores per ENGINE_SPEC v1.1
+ * Base Market Scores per ENGINE_SPEC v1.2
+ * Expressive markets (ML, O2.5) get equal priority
+ * Safe markets (DC, O1.5) are penalized to prevent over-selection
  */
 const BASE_MARKET_SCORES: Record<MarketType, number> = {
-  MATCH_RESULT: 50,
-  DOUBLE_CHANCE: 45,
-  OVER_1_5: 48,
-  OVER_2_5: 46,
+  MATCH_RESULT: 50,     // Expressive - clear position
+  DOUBLE_CHANCE: 42,    // Safe fallback (-3 from original)
+  OVER_1_5: 44,         // Safe fallback (-4 from original)
+  OVER_2_5: 50,         // Expressive - equal to ML (+4 from original)
 };
 
 /**
@@ -105,13 +107,13 @@ const CONFIDENCE_SANITY = {
 } as const;
 
 /**
- * Dominance override thresholds per ENGINE_SPEC v1.1
- * Prevents "safety bias" in elite mismatches
+ * Dominance override thresholds per ENGINE_SPEC v1.2
+ * Lowered thresholds to trigger more often and boost expressive markets
  */
 const DOMINANCE_OVERRIDE = {
-  FAVORITE_MIN_PROB: 0.70,  // Favorite implied probability >= 70%
-  UNDERDOG_MAX_PROB: 0.20,  // Underdog probability <= 20%
-  VOLUME_THRESHOLD: 1000,   // Total market volume >= threshold
+  FAVORITE_MIN_PROB: 0.60,  // Was 0.70 - now triggers for clearer favorites
+  UNDERDOG_MAX_PROB: 0.25,  // Was 0.20 - slightly relaxed
+  VOLUME_THRESHOLD: 500,    // Was 1000 - lower barrier
 } as const;
 
 /**
@@ -710,18 +712,41 @@ function buildMarketSelection(score: MarketScore): MarketSelection {
 }
 
 /**
+ * Boost applied to expressive markets when safe markets are blocked
+ * This ensures ML and O2.5 are promoted when DC/O1.5 hit usefulness ceilings
+ */
+const EXPRESSIVE_BOOST_ON_SAFE_BLOCK = 6;
+
+/**
  * Select PRIMARY market applying constraints
  * Respects usefulness ceilings per ENGINE_SPEC v1.1
+ * v1.2: Boosts expressive markets (ML, O2.5) when safe markets (DC, O1.5) are blocked
  */
 function selectPrimaryMarket(scores: MarketScore[]): MarketScore | null {
+  // Check if any safe market was blocked by usefulness ceiling
+  const safeMarketsBlocked = scores.some(
+    (s) => s.blockedAsPrimary && (s.market === "DOUBLE_CHANCE" || s.market === "OVER_1_5")
+  );
+
+  // If safe markets were blocked, create adjusted scores with expressive boost
+  let adjustedScores = scores;
+  if (safeMarketsBlocked) {
+    adjustedScores = scores.map((s) => {
+      if (s.market === "MATCH_RESULT" || s.market === "OVER_2_5") {
+        return { ...s, finalScore: s.finalScore + EXPRESSIVE_BOOST_ON_SAFE_BLOCK };
+      }
+      return s;
+    }).sort((a, b) => b.finalScore - a.finalScore);
+  }
+
   // Find highest scoring market that isn't blocked
-  for (const score of scores) {
+  for (const score of adjustedScores) {
     if (!score.blockedAsPrimary) {
       return score;
     }
   }
   // If all are blocked (unlikely), take highest anyway
-  return scores[0] || null;
+  return adjustedScores[0] || null;
 }
 
 /**

@@ -210,10 +210,10 @@ async function callGroq(prompt: string): Promise<GroqAnalysis> {
     concerns: ["AI analysis unavailable - defaulting to home advantage"],
     probabilities: {
       homeWin: 0.40,
-      draw: 0.30,
-      awayWin: 0.30,
-      over15: 0.65,
-      over25: 0.45,
+      draw: 0.25,
+      awayWin: 0.35,
+      over15: 0.55,    // Was 0.65 - reduced to prevent O1.5 bias
+      over25: 0.50,    // Was 0.45 - increased for balance
     },
   };
 
