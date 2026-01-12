@@ -88,6 +88,23 @@ const USEFULNESS_CEILINGS = {
 } as const;
 
 /**
+ * Draw market safeguards per ENGINE_SPEC v1.2
+ * DRAW cannot be PRIMARY under certain conditions
+ */
+const DRAW_SAFEGUARDS = {
+  MIN_DRAW_PROBABILITY: 0.15,   // Draw cannot be PRIMARY if market prob < 15%
+  MAX_FAVORITE_PROBABILITY: 0.65, // Draw cannot be PRIMARY if favorite > 65%
+} as const;
+
+/**
+ * Confidence sanity check per ENGINE_SPEC v1.2
+ * Cap at VALUE if AI diverges significantly from market AND Gemini has concerns
+ */
+const CONFIDENCE_SANITY = {
+  MAX_DIVERGENCE: 0.25, // 25% divergence threshold
+} as const;
+
+/**
  * Dominance override thresholds per ENGINE_SPEC v1.1
  * Prevents "safety bias" in elite mismatches
  */
@@ -174,6 +191,41 @@ function isBlockedByUsefulnessCeiling(
       reason: `Double Chance at ${Math.round(aiProbability * 100)}% is too safe for PRIMARY`,
     };
   }
+  return { blocked: false, reason: null };
+}
+
+/**
+ * Check if DRAW selection is blocked from being PRIMARY per ENGINE_SPEC v1.2
+ * DRAW cannot be PRIMARY if:
+ * - Market probability < 15%
+ * - OR favorite win prob > 65%
+ */
+function isDrawBlockedAsPrimary(
+  selection: string,
+  drawProbability: number,
+  favoriteProb: number
+): { blocked: boolean; reason: string | null } {
+  // Only applies to Draw selections
+  if (!selection.toLowerCase().includes("draw")) {
+    return { blocked: false, reason: null };
+  }
+
+  // Block if draw probability is too low
+  if (drawProbability < DRAW_SAFEGUARDS.MIN_DRAW_PROBABILITY) {
+    return {
+      blocked: true,
+      reason: `Draw at ${Math.round(drawProbability * 100)}% is too unlikely for PRIMARY`,
+    };
+  }
+
+  // Block if there's a strong favorite
+  if (favoriteProb > DRAW_SAFEGUARDS.MAX_FAVORITE_PROBABILITY) {
+    return {
+      blocked: true,
+      reason: `Strong favorite (${Math.round(favoriteProb * 100)}%) makes Draw risky as PRIMARY`,
+    };
+  }
+
   return { blocked: false, reason: null };
 }
 
@@ -355,6 +407,8 @@ function getMarketProbability(
 /**
  * Score a single market per ENGINE_SPEC v1.1 formula:
  * finalScore = baseMarketScore + polymarketSignal + groqConfidence + geminiPenalty
+ *
+ * v1.2: Added favoriteProb for Draw safeguard checks
  */
 function scoreMarket(
   marketType: MarketType,
@@ -364,7 +418,8 @@ function scoreMarket(
   volume: number,
   groqConfidence: "HIGH" | "MEDIUM" | "LOW",
   geminiPenalty: number,
-  reasoning: string
+  reasoning: string,
+  favoriteProb: number = 0 // For Draw safeguard check
 ): MarketScore {
   // Base score from ENGINE_SPEC v1.1 (fixed per market type)
   const baseScore = BASE_MARKET_SCORES[marketType];
@@ -384,7 +439,14 @@ function scoreMarket(
   const finalScore = baseScore + polymarketSignal + groqConfidenceBonus + geminiPenalty;
 
   // Check usefulness ceiling constraint
-  const { blocked, reason } = isBlockedByUsefulnessCeiling(marketType, aiProbability);
+  const usefulnessCheck = isBlockedByUsefulnessCeiling(marketType, aiProbability);
+
+  // Check Draw safeguard constraint (v1.2)
+  const drawCheck = isDrawBlockedAsPrimary(selection, aiProbability, favoriteProb);
+
+  // Combine constraints - blocked if EITHER applies
+  const blocked = usefulnessCheck.blocked || drawCheck.blocked;
+  const reason = usefulnessCheck.reason || drawCheck.reason;
 
   return {
     market: marketType,
@@ -450,13 +512,24 @@ function checkDominanceOverride(
  * Apply dominance override to scores (bipolar adjustment)
  * Boosts expressive markets (ML, O2.5) and suppresses safe markets (DC, O1.5)
  * This actively overrides safety bias in dominant fixtures
+ *
+ * v1.2: Dominance override MUST NOT apply to DRAW selections
  */
 function applyDominanceOverride(scores: MarketScore[], isDominant: boolean): MarketScore[] {
   if (!isDominant) return scores;
 
   return scores.map((score) => {
-    // Boost expressive markets
-    if (score.market === "MATCH_RESULT" || score.market === "OVER_2_5") {
+    // v1.2: NEVER boost Draw selections in dominance override
+    const isDrawSelection = score.selection.toLowerCase().includes("draw");
+
+    // Boost expressive markets (ML for non-Draw, O2.5)
+    if (score.market === "MATCH_RESULT" && !isDrawSelection) {
+      return {
+        ...score,
+        finalScore: score.finalScore + DOMINANCE_ADJUSTMENTS.EXPRESSIVE_BOOST,
+      };
+    }
+    if (score.market === "OVER_2_5") {
       return {
         ...score,
         finalScore: score.finalScore + DOMINANCE_ADJUSTMENTS.EXPRESSIVE_BOOST,
@@ -478,30 +551,64 @@ function applyDominanceOverride(scores: MarketScore[], isDominant: boolean): Mar
 // ============================================================================
 
 /**
+ * Check confidence sanity per ENGINE_SPEC v1.2
+ * Returns true if BANKER should be blocked due to divergence
+ */
+function shouldBlockBankerForDivergence(
+  aiProbability: number,
+  marketProbability: number | null,
+  geminiVerification: GeminiVerification
+): boolean {
+  // Only applies when market probability is available
+  if (marketProbability === null) return false;
+
+  // Check divergence
+  const divergence = Math.abs(aiProbability - marketProbability);
+
+  // Block BANKER if divergence > 25% AND Gemini has concerns
+  return (
+    divergence > CONFIDENCE_SANITY.MAX_DIVERGENCE &&
+    geminiVerification.cautionLevel !== "none"
+  );
+}
+
+/**
  * Determine category based on final score per ENGINE_SPEC v1.1
  * - BANKER: >= 70 AND no strong Gemini caution
  * - VALUE: 55-69
  * - RISKY: 40-54
  * - NO BET: < 40
+ *
+ * v1.2: Added confidence sanity check - cap at VALUE if AI/Market diverge > 25% AND Gemini caution
  */
 function determineCategory(
   finalScore: number,
-  geminiVerification: GeminiVerification
+  geminiVerification: GeminiVerification,
+  aiProbability: number = 0,
+  marketProbability: number | null = null
 ): PredictionCategory {
   // NO BET if below minimum threshold
   if (finalScore < CATEGORY_THRESHOLDS.NO_BET) {
     return "RISKY"; // We use RISKY to represent NO_BET in our type system
   }
 
-  // BANKER: >= 70 AND no strong Gemini caution
+  // v1.2: Confidence sanity check - block BANKER if divergence is too high
+  const blockBankerForDivergence = shouldBlockBankerForDivergence(
+    aiProbability,
+    marketProbability,
+    geminiVerification
+  );
+
+  // BANKER: >= 70 AND no strong Gemini caution AND passes sanity check
   if (
     finalScore >= CATEGORY_THRESHOLDS.BANKER &&
-    geminiVerification.cautionLevel !== "strong"
+    geminiVerification.cautionLevel !== "strong" &&
+    !blockBankerForDivergence
   ) {
     return "BANKER";
   }
 
-  // VALUE: 55-69
+  // VALUE: 55-69 (or would-be BANKER blocked by sanity check)
   if (finalScore >= CATEGORY_THRESHOLDS.VALUE_MIN) {
     return "VALUE";
   }
@@ -532,6 +639,9 @@ export function scoreAllMarkets(
     return scores;
   }
 
+  // Calculate favorite probability for Draw safeguard (v1.2)
+  const favoriteProb = Math.max(probs.homeWin, probs.awayWin);
+
   // Helper to add a market score
   const addMarketScore = (
     marketType: MarketType,
@@ -554,7 +664,8 @@ export function scoreAllMarkets(
         volume,
         groqConfidence,
         geminiPenalty,
-        reasoning
+        reasoning,
+        favoriteProb // Pass for Draw safeguard check
       )
     );
   };
@@ -757,10 +868,12 @@ export function generateEnginePrediction(
     };
   }
 
-  // Determine category per ENGINE_SPEC v1.1
+  // Determine category per ENGINE_SPEC v1.1 + v1.2 sanity check
   const category = determineCategory(
     primary.finalScore,
-    analysis.geminiVerification
+    analysis.geminiVerification,
+    primary.aiProbability,
+    primary.marketProbability
   );
 
   // Select SECONDARY (respecting correlation constraints)

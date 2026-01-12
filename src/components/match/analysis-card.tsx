@@ -63,6 +63,17 @@ function getMarketProbForSelection(
   return outcome ? Math.round(outcome.probability * 100) : null;
 }
 
+/**
+ * Convert engine score to confidence level per ENGINE_SPEC v1.2
+ * Engine scores are NOT probabilities - display as confidence levels
+ * ≥70 → High, 55–69 → Medium, 40–54 → Low
+ */
+function getEngineConfidenceLevel(score: number): { level: string; color: string } {
+  if (score >= 70) return { level: "High", color: "text-emerald-400" };
+  if (score >= 55) return { level: "Medium", color: "text-amber-400" };
+  return { level: "Low", color: "text-red-400" };
+}
+
 export function AnalysisCard({ prediction, analysis, sentiment }: AnalysisCardProps) {
   const { category, primaryMarket, alternativeMarket, narrative, keyFactors, disclaimers } = prediction;
   const isBanker = category === "BANKER";
@@ -143,9 +154,12 @@ export function AnalysisCard({ prediction, analysis, sentiment }: AnalysisCardPr
               </span>
             </div>
             <p className="font-bold text-xl mb-2">{primaryMarket.selection}</p>
-            {/* Engine probability per UI_UX_SPEC v1.1 section 2.1 */}
+            {/* Engine confidence per ENGINE_SPEC v1.2 - scores are NOT probabilities */}
             <p className="text-sm font-medium text-foreground/80 mb-2">
-              Engine probability: ~{primaryMarket.confidence}%
+              Engine confidence:{" "}
+              <span className={getEngineConfidenceLevel(primaryMarket.confidence).color}>
+                {getEngineConfidenceLevel(primaryMarket.confidence).level}
+              </span>
             </p>
             <p className="text-sm text-muted-foreground leading-relaxed">
               {primaryMarket.reasoning}
@@ -211,7 +225,10 @@ export function AnalysisCard({ prediction, analysis, sentiment }: AnalysisCardPr
             </div>
             <p className="font-semibold mb-1">{alternativeMarket.selection}</p>
             <p className="text-sm text-muted-foreground">
-              Engine probability: ~{alternativeMarket.confidence}%
+              Engine confidence:{" "}
+              <span className={getEngineConfidenceLevel(alternativeMarket.confidence).color}>
+                {getEngineConfidenceLevel(alternativeMarket.confidence).level}
+              </span>
             </p>
           </div>
         )}

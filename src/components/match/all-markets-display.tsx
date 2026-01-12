@@ -3,7 +3,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { MARKETS } from "@/config/markets";
 import type { MarketSelection, MarketSentiment } from "@/types";
-import { TrendingUp, TrendingDown, Minus, BarChart3 } from "lucide-react";
+import { BarChart3 } from "lucide-react";
 
 interface AllMarketsDisplayProps {
   markets: MarketSelection[];
@@ -32,6 +32,17 @@ function isCorrelatedWith(marketType: string, primaryType?: string, secondaryTyp
       ((marketType === a && secondaryType === b) || (marketType === b && secondaryType === a));
     return matchesPrimary || matchesSecondary;
   });
+}
+
+/**
+ * Convert engine score to confidence level per ENGINE_SPEC v1.2
+ * Engine scores are NOT probabilities - display as confidence levels
+ * ≥70 → High, 55–69 → Medium, 40–54 → Low
+ */
+function getEngineConfidenceLevel(score: number): { level: string; color: string } {
+  if (score >= 70) return { level: "High", color: "text-emerald-400" };
+  if (score >= 55) return { level: "Medium", color: "text-amber-400" };
+  return { level: "Low", color: "text-red-400" };
 }
 
 /**
@@ -147,14 +158,14 @@ export function AllMarketsDisplay({ markets, sentiment, primaryType, secondaryTy
 
       <CardContent className="space-y-3">
         {validMarkets.map((market, idx) => {
-          const aiProb = market.confidence;
+          const engineScore = market.confidence;
+          const confidence = getEngineConfidenceLevel(engineScore);
           const marketProb = getMarketProbForSelection(
             sentiment,
             market.type,
             market.selection
           );
           const hasMarketData = marketProb !== null;
-          const edge = hasMarketData ? aiProb - marketProb : null;
 
           return (
             <div
@@ -171,49 +182,21 @@ export function AllMarketsDisplay({ markets, sentiment, primaryType, secondaryTy
                 </span>
               </div>
 
-              {/* Probability display - per spec 3.2: show AI only if no market data */}
-              {hasMarketData ? (
-                <div className="flex gap-2 mb-2">
-                  <div className="flex-1 p-2 bg-blue-500/10 rounded border border-blue-500/20">
-                    <span className="text-xs text-blue-400 font-medium">AI</span>
-                    <p className="text-sm font-bold text-foreground">{aiProb}%</p>
-                  </div>
+              {/* Engine confidence + Market probability display */}
+              <div className="flex gap-2 mb-2">
+                <div className="flex-1 p-2 bg-secondary/50 rounded border border-border/30">
+                  <span className="text-xs text-muted-foreground font-medium">Engine</span>
+                  <p className={`text-sm font-bold ${confidence.color}`}>
+                    {confidence.level}
+                  </p>
+                </div>
+                {hasMarketData && (
                   <div className="flex-1 p-2 bg-emerald-500/10 rounded border border-emerald-500/20">
                     <span className="text-xs text-emerald-400 font-medium">Market</span>
                     <p className="text-sm font-bold text-foreground">{marketProb}%</p>
                   </div>
-                </div>
-              ) : (
-                <div className="p-2 bg-blue-500/10 rounded border border-blue-500/20 mb-2">
-                  <span className="text-xs text-blue-400 font-medium">AI Estimate</span>
-                  <p className="text-sm font-bold text-foreground">{aiProb}%</p>
-                </div>
-              )}
-
-              {/* Edge indicator - only when both probabilities available */}
-              {edge !== null && (
-                <div
-                  className={`flex items-center gap-1.5 text-xs ${
-                    edge > 5
-                      ? "text-emerald-400"
-                      : edge < -5
-                        ? "text-red-400"
-                        : "text-muted-foreground"
-                  }`}
-                >
-                  {edge > 0 ? (
-                    <TrendingUp className="w-3 h-3" />
-                  ) : edge < 0 ? (
-                    <TrendingDown className="w-3 h-3" />
-                  ) : (
-                    <Minus className="w-3 h-3" />
-                  )}
-                  <span className="font-medium">
-                    {edge > 0 ? "+" : ""}
-                    {edge}% edge
-                  </span>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           );
         })}
