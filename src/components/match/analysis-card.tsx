@@ -120,12 +120,18 @@ export function AnalysisCard({ prediction, analysis, sentiment }: AnalysisCardPr
                 : "bg-secondary/50"
           }`}>
             <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-medium text-muted-foreground">
+              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                {isBanker ? "Banker Pick" : isRisky ? "Risky Pick" : "Value Pick"}
+              </span>
+              <span className="text-xs text-muted-foreground">
                 {MARKETS[primaryMarket.type]?.name || primaryMarket.type}
               </span>
-              <ConfidenceIndicator confidence={primaryMarket.confidence} />
             </div>
             <p className="font-bold text-xl mb-2">{primaryMarket.selection}</p>
+            {/* Engine probability per UI_UX_SPEC v1.1 section 2.1 */}
+            <p className="text-sm font-medium text-foreground/80 mb-2">
+              Engine probability: ~{primaryMarket.confidence}%
+            </p>
             <p className="text-sm text-muted-foreground leading-relaxed">
               {primaryMarket.reasoning}
             </p>
@@ -168,32 +174,30 @@ export function AnalysisCard({ prediction, analysis, sentiment }: AnalysisCardPr
           </div>
         ) : (
           <div className="p-4 rounded-lg bg-secondary/30 border border-border/50">
-            <p className="text-sm text-muted-foreground mb-2">No specific market suggestion</p>
-            <p className="text-xs text-muted-foreground/70">
-              Analysis available below. Refresh to regenerate prediction with market data.
+            <p className="text-sm text-muted-foreground">
+              No specific market suggestion available.
             </p>
           </div>
         )}
 
-        {/* Alternative Market - Not shown for RISKY */}
+        {/* Alternative Market - Not shown for RISKY per UI_UX_SPEC v1.1 section 2.2 */}
         {alternativeMarket && !isRisky && (
           <div className="p-4 rounded-lg border border-border/50 bg-card">
-            <div className="flex items-center gap-2 mb-3">
-              <Shield className="w-4 h-4 text-muted-foreground" />
-              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                Safer Alternative
-              </span>
-            </div>
-            <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Shield className="w-4 h-4 text-muted-foreground" />
+                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  Safer Alternative
+                </span>
+              </div>
               <span className="text-xs text-muted-foreground">
                 {MARKETS[alternativeMarket.type]?.name}
               </span>
-              <ConfidenceIndicator
-                confidence={alternativeMarket.confidence}
-                size="sm"
-              />
             </div>
-            <p className="font-semibold">{alternativeMarket.selection}</p>
+            <p className="font-semibold mb-1">{alternativeMarket.selection}</p>
+            <p className="text-sm text-muted-foreground">
+              Engine probability: ~{alternativeMarket.confidence}%
+            </p>
           </div>
         )}
 

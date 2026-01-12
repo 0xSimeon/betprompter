@@ -1,9 +1,9 @@
 /**
- * Engine Scoring Module
- * Per ENGINE_SPEC.md: Deterministic, rule-based scoring
+ * Engine Scoring Module - ENGINE_SPEC v1.1
  *
- * AI models do NOT make decisions - they provide signals only.
- * Final decisions are made by this code.
+ * Deterministic, rule-based scoring.
+ * AI models provide signals only - final decisions are made by this code.
+ * Same inputs must always produce same outputs.
  */
 
 import type {
@@ -19,51 +19,112 @@ import type { MarketType } from "@/config/markets";
 import { nowGMT1 } from "@/lib/date";
 
 // ============================================================================
-// ENGINE CONSTANTS (Tunable)
+// ENGINE CONSTANTS (Per ENGINE_SPEC v1.1)
 // ============================================================================
 
 /**
- * Gemini penalty values per ENGINE_SPEC
+ * Base Market Scores per ENGINE_SPEC v1.1
  */
-const GEMINI_PENALTIES = {
-  OVERCONFIDENCE: -10,
-  MISSING_CONTEXT: -15,
-  CAUTION_MILD: -5,
-  CAUTION_STRONG: -20,
-} as const;
-
-/**
- * Market risk weights per ENGINE_SPEC
- * Lower = safer, Higher = riskier
- * Over 1.5 < Double Chance < Over 2.5 < Match Result
- */
-const MARKET_RISK_WEIGHT: Record<MarketType, number> = {
-  OVER_1_5: 1,       // Lowest variance
-  DOUBLE_CHANCE: 2,
-  OVER_2_5: 3,
-  MATCH_RESULT: 4,   // Highest variance
+const BASE_MARKET_SCORES: Record<MarketType, number> = {
+  MATCH_RESULT: 50,
+  DOUBLE_CHANCE: 45,
+  OVER_1_5: 48,
+  OVER_2_5: 46,
 };
 
 /**
+ * Gemini penalty values per ENGINE_SPEC v1.1
+ * - mild: -15
+ * - strong: -35
+ * - overconfidence + missingContext together: additional -10
+ */
+const GEMINI_PENALTIES = {
+  CAUTION_MILD: -15,
+  CAUTION_STRONG: -35,
+  COMBINED_FLAGS_BONUS: -10, // Additional when both overconfidence AND missingContext
+} as const;
+
+/**
+ * Polymarket signal bonuses/penalties per ENGINE_SPEC v1.1
+ */
+const POLYMARKET_SIGNALS = {
+  VOLUME_BONUS: 10,         // +10 if volume >= threshold
+  ALIGNMENT_BONUS: 10,      // +10 if probability aligns with Groq lean
+  LOW_PAYOUT_PENALTY: -10,  // -10 if extremely low payout proxy (e.g. DC at ~1.04 implied)
+  VOLUME_THRESHOLD: 1000,   // Minimum volume for bonus
+  LOW_PAYOUT_THRESHOLD: 0.96, // 96%+ implied probability = low payout
+} as const;
+
+/**
+ * Groq confidence scoring per ENGINE_SPEC v1.1
+ * Linear scale from Groq output (max +20)
+ */
+const GROQ_CONFIDENCE = {
+  HIGH: 20,
+  MEDIUM: 10,
+  LOW: 0,
+} as const;
+
+/**
+ * Category thresholds per ENGINE_SPEC v1.1
+ */
+const CATEGORY_THRESHOLDS = {
+  BANKER: 70,   // >= 70 AND no strong Gemini caution
+  VALUE_MIN: 55,
+  VALUE_MAX: 69,
+  RISKY_MIN: 40,
+  RISKY_MAX: 54,
+  NO_BET: 40,   // < 40
+} as const;
+
+/**
+ * Market usefulness ceilings per ENGINE_SPEC v1.1
+ * Over 1.5 and Double Chance cannot be PRIMARY above these thresholds
+ * These are hard constraints enforced before scoring and selection
+ */
+const USEFULNESS_CEILINGS = {
+  OVER_1_5: 0.78,      // Cannot be PRIMARY if AI probability > 78%
+  DOUBLE_CHANCE: 0.75, // Cannot be PRIMARY if AI probability > 75%
+} as const;
+
+/**
+ * Dominance override thresholds per ENGINE_SPEC v1.1
+ * Prevents "safety bias" in elite mismatches
+ */
+const DOMINANCE_OVERRIDE = {
+  FAVORITE_MIN_PROB: 0.70,  // Favorite implied probability >= 70%
+  UNDERDOG_MAX_PROB: 0.20,  // Underdog probability <= 20%
+  VOLUME_THRESHOLD: 1000,   // Total market volume >= threshold
+} as const;
+
+/**
+ * Dominance score adjustments per ENGINE_SPEC v1.1
+ * Bipolar: boost expressive markets, suppress ultra-safe markets
+ */
+const DOMINANCE_ADJUSTMENTS = {
+  EXPRESSIVE_BOOST: 12,  // +12 for ML and Over 2.5
+  SAFE_PENALTY: -12,     // -12 for DC and Over 1.5
+} as const;
+
+/**
+ * Correlated market pairs - PRIMARY and SECONDARY must be uncorrelated
+ * These pairs are forbidden together per ENGINE_SPEC v1.1
+ */
+const CORRELATED_MARKETS: Array<[MarketType, MarketType]> = [
+  ["MATCH_RESULT", "DOUBLE_CHANCE"],  // ML + DC forbidden
+  ["OVER_1_5", "DOUBLE_CHANCE"],      // O1.5 + DC forbidden (both are safety nets)
+  ["OVER_1_5", "OVER_2_5"],           // O1.5 + O2.5 forbidden (strongly correlated)
+];
+
+/**
  * Minimum score threshold for a valid bet
- * If highest market score < this, NO BET
  */
 const MIN_SCORE_THRESHOLD = 40;
 
 /**
- * Alternative pick margin
- * Alternative must be within this margin of primary
+ * Alternative pick margin - must be within this of primary
  */
 const ALTERNATIVE_MARGIN = 15;
-
-/**
- * Volume thresholds for market confidence
- */
-const VOLUME_THRESHOLDS = {
-  HIGH: 10000,   // High liquidity
-  MODERATE: 1000, // Moderate liquidity
-  LOW: 100,      // Low liquidity
-} as const;
 
 /**
  * Daily bet cap per ENGINE_SPEC
@@ -71,38 +132,117 @@ const VOLUME_THRESHOLDS = {
 export const DAILY_BET_CAP = 5;
 
 // ============================================================================
-// SCORING FUNCTIONS
+// SCORING TYPES
 // ============================================================================
 
 interface MarketScore {
   market: MarketType;
   selection: string;
   baseScore: number;
-  volumeBonus: number;
-  riskPenalty: number;
+  polymarketSignal: number;
+  groqConfidenceBonus: number;
   geminiPenalty: number;
   finalScore: number;
   aiProbability: number;
   marketProbability: number | null;
   reasoning: string;
+  // Constraint flags
+  blockedAsPrimary: boolean;
+  blockReason: string | null;
+}
+
+// ============================================================================
+// CONSTRAINT FUNCTIONS (Applied FIRST per ENGINE_SPEC v1.1)
+// ============================================================================
+
+/**
+ * Check if market is blocked from being PRIMARY due to usefulness ceiling
+ */
+function isBlockedByUsefulnessCeiling(
+  marketType: MarketType,
+  aiProbability: number
+): { blocked: boolean; reason: string | null } {
+  if (marketType === "OVER_1_5" && aiProbability > USEFULNESS_CEILINGS.OVER_1_5) {
+    return {
+      blocked: true,
+      reason: `Over 1.5 at ${Math.round(aiProbability * 100)}% is too safe for PRIMARY`,
+    };
+  }
+  if (marketType === "DOUBLE_CHANCE" && aiProbability > USEFULNESS_CEILINGS.DOUBLE_CHANCE) {
+    return {
+      blocked: true,
+      reason: `Double Chance at ${Math.round(aiProbability * 100)}% is too safe for PRIMARY`,
+    };
+  }
+  return { blocked: false, reason: null };
 }
 
 /**
- * Calculate Gemini penalty from verification flags
- * Per ENGINE_SPEC: Uses overconfidence, missingContext, cautionLevel
+ * Check if two markets are correlated (forbidden as PRIMARY + SECONDARY)
+ */
+function areMarketsCorrelated(market1: MarketType, market2: MarketType): boolean {
+  return CORRELATED_MARKETS.some(
+    ([a, b]) => (market1 === a && market2 === b) || (market1 === b && market2 === a)
+  );
+}
+
+// ============================================================================
+// SCORING FUNCTIONS (Applied SECOND per ENGINE_SPEC v1.1)
+// ============================================================================
+
+/**
+ * Calculate Groq confidence bonus (max +20, linear scale)
+ */
+function calculateGroqConfidenceBonus(confidence: "HIGH" | "MEDIUM" | "LOW"): number {
+  return GROQ_CONFIDENCE[confidence] ?? 0;
+}
+
+/**
+ * Calculate Polymarket signal per ENGINE_SPEC v1.1
+ * +10 if volume >= threshold
+ * +10 if probability aligns with Groq lean
+ * -10 if market is extremely low payout proxy
+ */
+function calculatePolymarketSignal(
+  volume: number,
+  marketProbability: number | null,
+  aiProbability: number,
+  marketType: MarketType
+): number {
+  let signal = 0;
+
+  // +10 if volume >= threshold
+  if (volume >= POLYMARKET_SIGNALS.VOLUME_THRESHOLD) {
+    signal += POLYMARKET_SIGNALS.VOLUME_BONUS;
+  }
+
+  // +10 if probability aligns with Groq lean (within 15% of each other)
+  if (marketProbability !== null) {
+    const alignment = Math.abs(aiProbability - marketProbability);
+    if (alignment <= 0.15) {
+      signal += POLYMARKET_SIGNALS.ALIGNMENT_BONUS;
+    }
+  }
+
+  // -10 if extremely low payout proxy (DC or O1.5 at 96%+)
+  if (
+    (marketType === "DOUBLE_CHANCE" || marketType === "OVER_1_5") &&
+    aiProbability >= POLYMARKET_SIGNALS.LOW_PAYOUT_THRESHOLD
+  ) {
+    signal += POLYMARKET_SIGNALS.LOW_PAYOUT_PENALTY;
+  }
+
+  return signal;
+}
+
+/**
+ * Calculate Gemini penalty from verification flags per ENGINE_SPEC v1.1
+ * - mild: -15
+ * - strong: -35
+ * - overconfidence + missingContext together: additional -10
  */
 function calculateGeminiPenalty(verification: GeminiVerification): number {
   let penalty = 0;
-
-  // Overconfidence penalty
-  if (verification.overconfidence) {
-    penalty += GEMINI_PENALTIES.OVERCONFIDENCE;
-  }
-
-  // Missing context penalty
-  if (verification.missingContext) {
-    penalty += GEMINI_PENALTIES.MISSING_CONTEXT;
-  }
 
   // Caution level penalty
   switch (verification.cautionLevel) {
@@ -112,66 +252,14 @@ function calculateGeminiPenalty(verification: GeminiVerification): number {
     case "strong":
       penalty += GEMINI_PENALTIES.CAUTION_STRONG;
       break;
-    // "none" = no penalty
+  }
+
+  // Additional penalty if BOTH overconfidence AND missingContext
+  if (verification.overconfidence && verification.missingContext) {
+    penalty += GEMINI_PENALTIES.COMBINED_FLAGS_BONUS;
   }
 
   return penalty;
-}
-
-/**
- * Calculate volume bonus based on market liquidity
- */
-function calculateVolumeBonus(volume: number): number {
-  if (volume >= VOLUME_THRESHOLDS.HIGH) return 10;
-  if (volume >= VOLUME_THRESHOLDS.MODERATE) return 5;
-  if (volume >= VOLUME_THRESHOLDS.LOW) return 2;
-  return 0;
-}
-
-/**
- * Calculate risk penalty based on market type
- * Higher variance markets get penalized
- */
-function calculateRiskPenalty(marketType: MarketType): number {
-  return MARKET_RISK_WEIGHT[marketType] * -2; // -2 per risk level
-}
-
-/**
- * Score a single market
- */
-function scoreMarket(
-  marketType: MarketType,
-  selection: string,
-  aiProbability: number,
-  marketProbability: number | null,
-  volume: number,
-  geminiPenalty: number,
-  reasoning: string
-): MarketScore {
-  // Base score from AI probability (0-100)
-  const baseScore = Math.round(aiProbability * 100);
-
-  // Volume bonus
-  const volumeBonus = calculateVolumeBonus(volume);
-
-  // Risk penalty based on market variance
-  const riskPenalty = calculateRiskPenalty(marketType);
-
-  // Final score
-  const finalScore = baseScore + volumeBonus + riskPenalty + geminiPenalty;
-
-  return {
-    market: marketType,
-    selection,
-    baseScore,
-    volumeBonus,
-    riskPenalty,
-    geminiPenalty,
-    finalScore,
-    aiProbability,
-    marketProbability,
-    reasoning,
-  };
 }
 
 /**
@@ -211,7 +299,7 @@ function getAIProbability(
 }
 
 /**
- * Get market probability from sentiment
+ * Get market probability from Polymarket sentiment
  */
 function getMarketProbability(
   sentiment: MarketSentiment | null,
@@ -228,6 +316,25 @@ function getMarketProbability(
   }
 
   const selLower = selection.toLowerCase();
+
+  // Handle Over/Under markets - Polymarket uses "Yes"/"No"
+  if (marketType === "OVER_2_5" || marketType === "OVER_1_5") {
+    const isOverSelection = selLower.includes("over");
+    let outcome = market.outcomes.find(
+      (o) => o.name.toLowerCase() === (isOverSelection ? "yes" : "no")
+    );
+    if (!outcome) {
+      outcome = market.outcomes.find(
+        (o) => o.name.toLowerCase().includes(isOverSelection ? "over" : "under")
+      );
+    }
+    return {
+      probability: outcome?.probability ?? null,
+      volume: market.volume,
+    };
+  }
+
+  // Standard matching
   const outcome = market.outcomes.find((o) => {
     const nameLower = o.name.toLowerCase();
     return (
@@ -246,6 +353,168 @@ function getMarketProbability(
 }
 
 /**
+ * Score a single market per ENGINE_SPEC v1.1 formula:
+ * finalScore = baseMarketScore + polymarketSignal + groqConfidence + geminiPenalty
+ */
+function scoreMarket(
+  marketType: MarketType,
+  selection: string,
+  aiProbability: number,
+  marketProbability: number | null,
+  volume: number,
+  groqConfidence: "HIGH" | "MEDIUM" | "LOW",
+  geminiPenalty: number,
+  reasoning: string
+): MarketScore {
+  // Base score from ENGINE_SPEC v1.1 (fixed per market type)
+  const baseScore = BASE_MARKET_SCORES[marketType];
+
+  // Polymarket signal
+  const polymarketSignal = calculatePolymarketSignal(
+    volume,
+    marketProbability,
+    aiProbability,
+    marketType
+  );
+
+  // Groq confidence bonus (max +20)
+  const groqConfidenceBonus = calculateGroqConfidenceBonus(groqConfidence);
+
+  // Final score per ENGINE_SPEC v1.1
+  const finalScore = baseScore + polymarketSignal + groqConfidenceBonus + geminiPenalty;
+
+  // Check usefulness ceiling constraint
+  const { blocked, reason } = isBlockedByUsefulnessCeiling(marketType, aiProbability);
+
+  return {
+    market: marketType,
+    selection,
+    baseScore,
+    polymarketSignal,
+    groqConfidenceBonus,
+    geminiPenalty,
+    finalScore,
+    aiProbability,
+    marketProbability,
+    reasoning,
+    blockedAsPrimary: blocked,
+    blockReason: reason,
+  };
+}
+
+// ============================================================================
+// DOMINANCE OVERRIDE (Applied THIRD per ENGINE_SPEC v1.1)
+// ============================================================================
+
+/**
+ * Check if dominance override applies (Bayern-style games)
+ * Per ENGINE_SPEC v1.1: If favorite >= 70%, underdog <= 20%, volume >= threshold
+ * Then allow ML or Over 2.5 to outrank DC or Over 1.5
+ *
+ * BLOCKED when Gemini cautionLevel === "strong" (hard risk brake)
+ */
+function checkDominanceOverride(
+  analysis: AIAnalysis,
+  sentiment: MarketSentiment | null
+): boolean {
+  // Block dominance override when Gemini caution is STRONG
+  if (analysis.geminiVerification.cautionLevel === "strong") {
+    return false;
+  }
+
+  const probs = analysis.groqAnalysis.probabilities;
+  if (!probs) return false;
+
+  // Find favorite and underdog probabilities
+  const homeProb = probs.homeWin;
+  const awayProb = probs.awayWin;
+
+  const favoriteProb = Math.max(homeProb, awayProb);
+  const underdogProb = Math.min(homeProb, awayProb);
+
+  // Check dominance conditions
+  const isDominant =
+    favoriteProb >= DOMINANCE_OVERRIDE.FAVORITE_MIN_PROB &&
+    underdogProb <= DOMINANCE_OVERRIDE.UNDERDOG_MAX_PROB;
+
+  if (!isDominant) return false;
+
+  // Check volume threshold
+  if (!sentiment?.available) return false;
+
+  const totalVolume = sentiment.markets.reduce((sum, m) => sum + m.volume, 0);
+  return totalVolume >= DOMINANCE_OVERRIDE.VOLUME_THRESHOLD;
+}
+
+/**
+ * Apply dominance override to scores (bipolar adjustment)
+ * Boosts expressive markets (ML, O2.5) and suppresses safe markets (DC, O1.5)
+ * This actively overrides safety bias in dominant fixtures
+ */
+function applyDominanceOverride(scores: MarketScore[], isDominant: boolean): MarketScore[] {
+  if (!isDominant) return scores;
+
+  return scores.map((score) => {
+    // Boost expressive markets
+    if (score.market === "MATCH_RESULT" || score.market === "OVER_2_5") {
+      return {
+        ...score,
+        finalScore: score.finalScore + DOMINANCE_ADJUSTMENTS.EXPRESSIVE_BOOST,
+      };
+    }
+    // Suppress ultra-safe markets
+    if (score.market === "DOUBLE_CHANCE" || score.market === "OVER_1_5") {
+      return {
+        ...score,
+        finalScore: score.finalScore + DOMINANCE_ADJUSTMENTS.SAFE_PENALTY,
+      };
+    }
+    return score;
+  });
+}
+
+// ============================================================================
+// CATEGORY DETERMINATION (Per ENGINE_SPEC v1.1)
+// ============================================================================
+
+/**
+ * Determine category based on final score per ENGINE_SPEC v1.1
+ * - BANKER: >= 70 AND no strong Gemini caution
+ * - VALUE: 55-69
+ * - RISKY: 40-54
+ * - NO BET: < 40
+ */
+function determineCategory(
+  finalScore: number,
+  geminiVerification: GeminiVerification
+): PredictionCategory {
+  // NO BET if below minimum threshold
+  if (finalScore < CATEGORY_THRESHOLDS.NO_BET) {
+    return "RISKY"; // We use RISKY to represent NO_BET in our type system
+  }
+
+  // BANKER: >= 70 AND no strong Gemini caution
+  if (
+    finalScore >= CATEGORY_THRESHOLDS.BANKER &&
+    geminiVerification.cautionLevel !== "strong"
+  ) {
+    return "BANKER";
+  }
+
+  // VALUE: 55-69
+  if (finalScore >= CATEGORY_THRESHOLDS.VALUE_MIN) {
+    return "VALUE";
+  }
+
+  // RISKY: 40-54
+  return "RISKY";
+}
+
+// ============================================================================
+// MAIN ENGINE FUNCTIONS
+// ============================================================================
+
+/**
  * Score all markets for a fixture
  * Returns markets sorted by final score (highest first)
  */
@@ -255,6 +524,7 @@ export function scoreAllMarkets(
   analysis: AIAnalysis
 ): MarketScore[] {
   const geminiPenalty = calculateGeminiPenalty(analysis.geminiVerification);
+  const groqConfidence = analysis.groqAnalysis.confidence;
   const probs = analysis.groqAnalysis.probabilities;
   const scores: MarketScore[] = [];
 
@@ -282,104 +552,38 @@ export function scoreAllMarkets(
         aiProb,
         marketProb,
         volume,
+        groqConfidence,
         geminiPenalty,
         reasoning
       )
     );
   };
 
-  // Match Result options
+  // Build all market options
   const homeTeam = fixture.homeTeam.shortName;
   const awayTeam = fixture.awayTeam.shortName;
 
-  addMarketScore(
-    "MATCH_RESULT",
-    "Home Win",
-    `${homeTeam} to win at home`
-  );
-  addMarketScore(
-    "MATCH_RESULT",
-    "Away Win",
-    `${awayTeam} to win away`
-  );
-  addMarketScore(
-    "MATCH_RESULT",
-    "Draw",
-    "Match to end in a draw"
-  );
+  // Match Result options
+  addMarketScore("MATCH_RESULT", "Home Win", `${homeTeam} to win at home`);
+  addMarketScore("MATCH_RESULT", "Away Win", `${awayTeam} to win away`);
+  addMarketScore("MATCH_RESULT", "Draw", "Match to end in a draw");
 
   // Double Chance options
-  addMarketScore(
-    "DOUBLE_CHANCE",
-    "1X",
-    `${homeTeam} win or draw`
-  );
-  addMarketScore(
-    "DOUBLE_CHANCE",
-    "X2",
-    `${awayTeam} win or draw`
-  );
+  addMarketScore("DOUBLE_CHANCE", "1X", `${homeTeam} win or draw`);
+  addMarketScore("DOUBLE_CHANCE", "X2", `${awayTeam} win or draw`);
 
   // Goals markets
-  addMarketScore(
-    "OVER_1_5",
-    "Over 1.5",
-    "At least 2 goals in the match"
-  );
-  addMarketScore(
-    "OVER_2_5",
-    "Over 2.5",
-    "At least 3 goals in the match"
-  );
+  addMarketScore("OVER_1_5", "Over 1.5", "At least 2 goals in the match");
+  addMarketScore("OVER_2_5", "Over 2.5", "At least 3 goals in the match");
+
+  // Check dominance override
+  const isDominant = checkDominanceOverride(analysis, sentiment);
+
+  // Apply dominance override (step 3)
+  const adjustedScores = applyDominanceOverride(scores, isDominant);
 
   // Sort by final score descending
-  return scores.sort((a, b) => b.finalScore - a.finalScore);
-}
-
-/**
- * Determine category based on score and confidence
- * Per ENGINE_SPEC: Uses Gemini flags for risk assessment
- */
-function determineCategory(
-  topScore: MarketScore,
-  analysis: AIAnalysis
-): PredictionCategory {
-  const { finalScore } = topScore;
-  const { overconfidence, cautionLevel } = analysis.geminiVerification;
-  const aiConfidence = analysis.groqAnalysis.confidence;
-
-  // Strong caution from Gemini = cap at VALUE
-  if (cautionLevel === "strong") {
-    return finalScore >= MIN_SCORE_THRESHOLD ? "VALUE" : "RISKY";
-  }
-
-  // BANKER: High score, no overconfidence, no strong caution, AI confident
-  if (
-    finalScore >= 65 &&
-    !overconfidence &&
-    aiConfidence === "HIGH" &&
-    cautionLevel !== "mild"
-  ) {
-    return "BANKER";
-  }
-
-  // BANKER: Very high score even with medium confidence
-  if (finalScore >= 75 && !overconfidence && cautionLevel === "none") {
-    return "BANKER";
-  }
-
-  // VALUE: Moderate score with good confidence
-  if (finalScore >= 50 && aiConfidence !== "LOW") {
-    return "VALUE";
-  }
-
-  // VALUE: Just above threshold
-  if (finalScore >= MIN_SCORE_THRESHOLD) {
-    return "VALUE";
-  }
-
-  // RISKY: Below threshold
-  return "RISKY";
+  return adjustedScores.sort((a, b) => b.finalScore - a.finalScore);
 }
 
 /**
@@ -395,8 +599,49 @@ function buildMarketSelection(score: MarketScore): MarketSelection {
 }
 
 /**
+ * Select PRIMARY market applying constraints
+ * Respects usefulness ceilings per ENGINE_SPEC v1.1
+ */
+function selectPrimaryMarket(scores: MarketScore[]): MarketScore | null {
+  // Find highest scoring market that isn't blocked
+  for (const score of scores) {
+    if (!score.blockedAsPrimary) {
+      return score;
+    }
+  }
+  // If all are blocked (unlikely), take highest anyway
+  return scores[0] || null;
+}
+
+/**
+ * Select SECONDARY market applying correlation constraints
+ * Must be uncorrelated with PRIMARY per ENGINE_SPEC v1.1
+ */
+function selectSecondaryMarket(
+  scores: MarketScore[],
+  primary: MarketScore
+): MarketScore | null {
+  for (let i = 1; i < scores.length; i++) {
+    const candidate = scores[i];
+    const scoreDiff = primary.finalScore - candidate.finalScore;
+
+    // Must be within margin
+    if (scoreDiff > ALTERNATIVE_MARGIN) continue;
+
+    // Must be different market type
+    if (candidate.market === primary.market) continue;
+
+    // Must NOT be correlated with PRIMARY
+    if (areMarketsCorrelated(primary.market, candidate.market)) continue;
+
+    return candidate;
+  }
+
+  return null;
+}
+
+/**
  * Generate disclaimers based on analysis and category
- * Per ENGINE_SPEC: Output a 1 sentence risk note from Gemini concern
  */
 function generateDisclaimers(
   analysis: AIAnalysis,
@@ -411,7 +656,7 @@ function generateDisclaimers(
     disclaimers.push(...groqAnalysis.concerns.slice(0, 2));
   }
 
-  // Gemini risk flags per ENGINE_SPEC
+  // Gemini risk flags
   if (geminiVerification.overconfidence) {
     disclaimers.push(
       geminiVerification.overconfidenceReason ||
@@ -444,6 +689,11 @@ function generateDisclaimers(
     }
   }
 
+  // Usefulness ceiling warning
+  if (topScore.blockReason) {
+    disclaimers.push(topScore.blockReason);
+  }
+
   // Ensure at least one disclaimer for RISKY
   if (category === "RISKY" && disclaimers.length === 0) {
     disclaimers.push("Conflicting signals in analysis.");
@@ -453,15 +703,22 @@ function generateDisclaimers(
 }
 
 /**
- * Generate prediction using ENGINE_SPEC scoring model
+ * Generate prediction using ENGINE_SPEC v1.1 scoring model
  * This is the main entry point for the engine
+ *
+ * Sequence per ENGINE_SPEC v1.1:
+ * 1. Apply constraints (usefulness ceilings, correlation rules)
+ * 2. Score markets (base + polymarket + groq + gemini)
+ * 3. Apply dominance override
+ * 4. Select PRIMARY (respecting constraints)
+ * 5. Select SECONDARY (respecting correlation rules)
  */
 export function generateEnginePrediction(
   fixture: Fixture,
   sentiment: MarketSentiment | null,
   analysis: AIAnalysis
 ): Prediction {
-  // Score all markets
+  // Score all markets (includes dominance override)
   const scores = scoreAllMarkets(fixture, sentiment, analysis);
 
   // If no scores (no probabilities), return RISKY with fallback
@@ -484,61 +741,45 @@ export function generateEnginePrediction(
     };
   }
 
-  const topScore = scores[0];
-  const category = determineCategory(topScore, analysis);
-  const primaryMarket = buildMarketSelection(topScore);
-
-  // Find alternative: second-highest, within margin, prefer lower variance
-  let alternativeMarket: MarketSelection | null = null;
-  for (let i = 1; i < scores.length; i++) {
-    const candidate = scores[i];
-    const scoreDiff = topScore.finalScore - candidate.finalScore;
-
-    // Within margin and different market type
-    if (
-      scoreDiff <= ALTERNATIVE_MARGIN &&
-      candidate.market !== topScore.market
-    ) {
-      // Prefer lower variance (lower risk weight)
-      if (
-        MARKET_RISK_WEIGHT[candidate.market] <
-        MARKET_RISK_WEIGHT[topScore.market]
-      ) {
-        alternativeMarket = buildMarketSelection(candidate);
-        break;
-      }
-    }
+  // Select PRIMARY (respecting usefulness ceilings)
+  const primary = selectPrimaryMarket(scores);
+  if (!primary) {
+    return {
+      fixtureId: fixture.id,
+      generatedAt: nowGMT1(),
+      category: "RISKY",
+      primaryMarket: buildMarketSelection(scores[0]),
+      alternativeMarket: null,
+      allMarkets: scores.slice(1, 5).map(buildMarketSelection),
+      narrative: analysis.groqAnalysis.narrative,
+      keyFactors: analysis.groqAnalysis.keyFactors,
+      disclaimers: ["All markets blocked by constraints."],
+    };
   }
 
-  // If no lower-variance alternative, take any within margin
-  if (!alternativeMarket) {
-    for (let i = 1; i < scores.length; i++) {
-      const candidate = scores[i];
-      const scoreDiff = topScore.finalScore - candidate.finalScore;
+  // Determine category per ENGINE_SPEC v1.1
+  const category = determineCategory(
+    primary.finalScore,
+    analysis.geminiVerification
+  );
 
-      if (
-        scoreDiff <= ALTERNATIVE_MARGIN &&
-        candidate.market !== topScore.market
-      ) {
-        alternativeMarket = buildMarketSelection(candidate);
-        break;
-      }
-    }
-  }
+  // Select SECONDARY (respecting correlation constraints)
+  const secondary = selectSecondaryMarket(scores, primary);
 
-  // Build all markets list (top 4 excluding primary)
+  // Build all markets list (excluding primary, top 4)
   const allMarkets = scores
-    .slice(1, 5)
+    .filter((s) => s !== primary)
+    .slice(0, 4)
     .map(buildMarketSelection);
 
-  const disclaimers = generateDisclaimers(analysis, category, topScore);
+  const disclaimers = generateDisclaimers(analysis, category, primary);
 
   return {
     fixtureId: fixture.id,
     generatedAt: nowGMT1(),
     category,
-    primaryMarket,
-    alternativeMarket,
+    primaryMarket: buildMarketSelection(primary),
+    alternativeMarket: secondary ? buildMarketSelection(secondary) : null,
     allMarkets,
     narrative: analysis.groqAnalysis.narrative,
     keyFactors: analysis.groqAnalysis.keyFactors,

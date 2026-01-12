@@ -6,8 +6,7 @@ import {
   AllMarketsDisplay,
   MarketSentimentDisplay,
   LineupsPanel,
-  AutoRefreshWrapper,
-  RefreshButton,
+  DataFreshnessIndicator,
 } from "@/components/match";
 import { FixtureStatusBadge } from "@/components/shared";
 
@@ -32,70 +31,70 @@ export default async function MatchPage({ params }: MatchPageProps) {
   }
 
   const lineupsAvailable = match.lineups?.available ?? false;
-  const hasAnalysis = !!match.analysis;
 
   return (
     <div className="container mx-auto px-4 py-6 max-w-5xl">
-      <AutoRefreshWrapper
-        fixtureId={fixtureId}
-        kickoff={match.kickoff}
-        lineupsAvailable={lineupsAvailable}
-        hasAnalysis={hasAnalysis}
-      >
-        <div className="space-y-6">
-          {/* Status and Refresh Row */}
-          <div className="flex items-center justify-between">
-            <FixtureStatusBadge
-              kickoff={match.kickoff}
-              lineupsAvailable={lineupsAvailable}
-              matchStatus={match.status}
-            />
-            <RefreshButton
-              fixtureId={fixtureId}
-              kickoff={match.kickoff}
-              lineupsAvailable={lineupsAvailable}
-            />
-          </div>
-
-          {/* Match Header */}
-          <MatchHeader fixture={match} />
-
-          {/* Side-by-side: Analysis + Market Sentiment */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Left: Combined Analysis Card */}
-            {match.prediction && (
-              <AnalysisCard
-                prediction={match.prediction}
-                analysis={match.analysis}
-                sentiment={match.sentiment}
-              />
-            )}
-
-            {/* Right: Market Sentiment - Always show */}
-            <MarketSentimentDisplay
-              sentiment={match.sentiment}
-              prediction={match.prediction}
-            />
-          </div>
-
-          {/* Other Market Tips - Full width below */}
-          {match.prediction?.allMarkets && match.prediction.allMarkets.length > 0 && (
-            <AllMarketsDisplay
-              markets={match.prediction.allMarkets}
-              sentiment={match.sentiment}
-            />
-          )}
-
-          {/* Lineups - Full width below */}
-          {match.lineups && (
-            <LineupsPanel
-              lineups={match.lineups}
-              homeTeamName={match.homeTeam.shortName || match.homeTeam.name}
-              awayTeamName={match.awayTeam.shortName || match.awayTeam.name}
-            />
-          )}
+      <div className="space-y-6">
+        {/* Status Row - Read-only per UI_UX_SPEC */}
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <FixtureStatusBadge
+            kickoff={match.kickoff}
+            lineupsAvailable={lineupsAvailable}
+            matchStatus={match.status}
+          />
+          <DataFreshnessIndicator
+            generatedAt={match.prediction?.generatedAt ?? null}
+            sentimentAvailable={match.sentiment?.available ?? false}
+          />
         </div>
-      </AutoRefreshWrapper>
+
+        {/* Match Header */}
+        <MatchHeader fixture={match} />
+
+        {/* Side-by-side: Analysis + Market Sentiment */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Left: Combined Analysis Card */}
+          {match.prediction && (
+            <AnalysisCard
+              prediction={match.prediction}
+              analysis={match.analysis}
+              sentiment={match.sentiment}
+            />
+          )}
+
+          {/* Right: Market Sentiment - Always show */}
+          <MarketSentimentDisplay
+            sentiment={match.sentiment}
+            prediction={match.prediction}
+          />
+        </div>
+
+        {/* Limited data note - per UI_UX_SPEC v1.1 section 4 (one-time, no repetition) */}
+        {match.prediction && !match.sentiment?.available && (
+          <p className="text-xs text-muted-foreground text-center">
+            Some markets are unavailable due to limited pre-match liquidity. The engine recommendation remains valid using available signals.
+          </p>
+        )}
+
+        {/* Other Market Tips - Full width below */}
+        {match.prediction?.allMarkets && match.prediction.allMarkets.length > 0 && (
+          <AllMarketsDisplay
+            markets={match.prediction.allMarkets}
+            sentiment={match.sentiment}
+            primaryType={match.prediction.primaryMarket?.type}
+            secondaryType={match.prediction.alternativeMarket?.type}
+          />
+        )}
+
+        {/* Lineups - Full width below */}
+        {match.lineups && (
+          <LineupsPanel
+            lineups={match.lineups}
+            homeTeamName={match.homeTeam.shortName || match.homeTeam.name}
+            awayTeamName={match.awayTeam.shortName || match.awayTeam.name}
+          />
+        )}
+      </div>
     </div>
   );
 }

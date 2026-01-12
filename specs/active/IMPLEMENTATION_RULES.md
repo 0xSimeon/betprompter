@@ -5,6 +5,13 @@ Defines how Claude must implement this project.
 
 ---
 
+## Spec Authority Rule
+
+Claude must only treat files in `/specs/active` as authoritative.
+Files in `/specs/archive` are historical reference only.
+If conflicts exist, `/specs/active` always wins.
+
+
 ## Absolute Rules
 - Follow ENGINE_SPEC.md strictly
 - Respect DATA_CONTRACT.md exactly

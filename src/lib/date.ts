@@ -240,6 +240,16 @@ export function getRollingTwoWeekDates(): string[] {
 }
 
 /**
+ * Get 72h window dates (today + next 2 days)
+ * Per UI_UX_SPEC: Homepage default is today + 1-2 days (~72h window)
+ * @returns Array of 3 date strings starting from today
+ */
+export function get72HourWindowDates(): string[] {
+  const today = getTodayGMT1();
+  return [today, addDays(today, 1), addDays(today, 2)];
+}
+
+/**
  * Get a human-readable label for a date relative to today
  * e.g., "Today", "Tomorrow", "Wed, 8 Jan"
  */

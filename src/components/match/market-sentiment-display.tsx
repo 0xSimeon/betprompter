@@ -90,6 +90,7 @@ export function MarketSentimentDisplay({
   sentiment,
   prediction,
 }: MarketSentimentDisplayProps) {
+  // Per UI_UX_SPEC v1.1 section 1.1: Show neutral label when unavailable
   if (!sentiment || !sentiment.available || sentiment.markets.length === 0) {
     return (
       <Card className="shadow-xl shadow-black/20 backdrop-blur-sm bg-card/95 h-fit">
@@ -102,12 +103,9 @@ export function MarketSentimentDisplay({
         <CardContent>
           <div className="flex items-start gap-3 p-4 rounded-lg bg-secondary/30 border border-border/50">
             <Minus className="w-5 h-5 text-muted-foreground shrink-0 mt-0.5" />
-            <div>
-              <p className="font-medium text-foreground mb-1">No market data</p>
-              <p className="text-sm text-muted-foreground">
-                Polymarket data is not available for this fixture.
-              </p>
-            </div>
+            <p className="text-sm text-muted-foreground">
+              Market sentiment unavailable
+            </p>
           </div>
         </CardContent>
       </Card>

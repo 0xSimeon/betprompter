@@ -8,6 +8,30 @@ import { TrendingUp, TrendingDown, Minus, BarChart3 } from "lucide-react";
 interface AllMarketsDisplayProps {
   markets: MarketSelection[];
   sentiment?: MarketSentiment | null;
+  primaryType?: string;
+  secondaryType?: string;
+}
+
+/**
+ * Correlated market pairs per ENGINE_SPEC v1.1
+ * These should not appear together
+ */
+const CORRELATED_PAIRS: Array<[string, string]> = [
+  ["MATCH_RESULT", "DOUBLE_CHANCE"],
+  ["OVER_1_5", "DOUBLE_CHANCE"],
+  ["OVER_1_5", "OVER_2_5"],
+];
+
+function isCorrelatedWith(marketType: string, primaryType?: string, secondaryType?: string): boolean {
+  if (!primaryType && !secondaryType) return false;
+
+  return CORRELATED_PAIRS.some(([a, b]) => {
+    const matchesPrimary = primaryType &&
+      ((marketType === a && primaryType === b) || (marketType === b && primaryType === a));
+    const matchesSecondary = secondaryType &&
+      ((marketType === a && secondaryType === b) || (marketType === b && secondaryType === a));
+    return matchesPrimary || matchesSecondary;
+  });
 }
 
 /**
@@ -89,8 +113,25 @@ function getMarketProbForSelection(
   return outcome ? Math.round(outcome.probability * 100) : null;
 }
 
-export function AllMarketsDisplay({ markets, sentiment }: AllMarketsDisplayProps) {
+export function AllMarketsDisplay({ markets, sentiment, primaryType, secondaryType }: AllMarketsDisplayProps) {
   if (!markets || markets.length === 0) return null;
+
+  // Per UI_UX_SPEC v1.1 section 3: Filter out markets with no usable signal
+  const validMarkets = markets.filter((market) => {
+    // Must have valid AI confidence (> 0)
+    if (!market.confidence || market.confidence <= 0) return false;
+
+    // Exclude PRIMARY and SECONDARY markets
+    if (market.type === primaryType || market.type === secondaryType) return false;
+
+    // Exclude correlation-blocked markets
+    if (isCorrelatedWith(market.type, primaryType, secondaryType)) return false;
+
+    return true;
+  });
+
+  // Don't render section if no valid markets
+  if (validMarkets.length === 0) return null;
 
   return (
     <Card className="shadow-lg shadow-black/10 backdrop-blur-sm bg-card/95">
@@ -100,19 +141,20 @@ export function AllMarketsDisplay({ markets, sentiment }: AllMarketsDisplayProps
           <CardTitle className="text-lg">Other Markets</CardTitle>
         </div>
         <p className="text-xs text-muted-foreground mt-1">
-          Additional tips based on AI analysis
+          Additional analysis from engine scoring
         </p>
       </CardHeader>
 
       <CardContent className="space-y-3">
-        {markets.map((market, idx) => {
+        {validMarkets.map((market, idx) => {
           const aiProb = market.confidence;
           const marketProb = getMarketProbForSelection(
             sentiment,
             market.type,
             market.selection
           );
-          const edge = marketProb !== null ? aiProb - marketProb : null;
+          const hasMarketData = marketProb !== null;
+          const edge = hasMarketData ? aiProb - marketProb : null;
 
           return (
             <div
@@ -129,21 +171,26 @@ export function AllMarketsDisplay({ markets, sentiment }: AllMarketsDisplayProps
                 </span>
               </div>
 
-              {/* Probability bars */}
-              <div className="flex gap-2 mb-2">
-                <div className="flex-1 p-2 bg-blue-500/10 rounded border border-blue-500/20">
-                  <span className="text-xs text-blue-400 font-medium">AI</span>
+              {/* Probability display - per spec 3.2: show AI only if no market data */}
+              {hasMarketData ? (
+                <div className="flex gap-2 mb-2">
+                  <div className="flex-1 p-2 bg-blue-500/10 rounded border border-blue-500/20">
+                    <span className="text-xs text-blue-400 font-medium">AI</span>
+                    <p className="text-sm font-bold text-foreground">{aiProb}%</p>
+                  </div>
+                  <div className="flex-1 p-2 bg-emerald-500/10 rounded border border-emerald-500/20">
+                    <span className="text-xs text-emerald-400 font-medium">Market</span>
+                    <p className="text-sm font-bold text-foreground">{marketProb}%</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-2 bg-blue-500/10 rounded border border-blue-500/20 mb-2">
+                  <span className="text-xs text-blue-400 font-medium">AI Estimate</span>
                   <p className="text-sm font-bold text-foreground">{aiProb}%</p>
                 </div>
-                <div className="flex-1 p-2 bg-emerald-500/10 rounded border border-emerald-500/20">
-                  <span className="text-xs text-emerald-400 font-medium">Market</span>
-                  <p className="text-sm font-bold text-foreground">
-                    {marketProb !== null ? `${marketProb}%` : "—"}
-                  </p>
-                </div>
-              </div>
+              )}
 
-              {/* Edge indicator */}
+              {/* Edge indicator - only when both probabilities available */}
               {edge !== null && (
                 <div
                   className={`flex items-center gap-1.5 text-xs ${
