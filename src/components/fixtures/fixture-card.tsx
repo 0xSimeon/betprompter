@@ -16,10 +16,9 @@ interface FixtureCardProps {
 export function FixtureCard({ fixture, className }: FixtureCardProps) {
   const { homeTeam, awayTeam, kickoff, leagueCode, prediction, sentiment, id, status, lineups } = fixture;
 
-  // Get top outcome from sentiment if available
-  const topOutcome = sentiment?.markets[0]?.outcomes.reduce((a, b) =>
-    a.probability > b.probability ? a : b
-  );
+  // Show the actual prediction pick, NOT the market's top outcome
+  // This prevents confusion where BANKER shows with unrelated market probability
+  const primaryPick = prediction?.primaryMarket;
 
   const isBanker = prediction?.category === "BANKER";
 
@@ -89,12 +88,12 @@ export function FixtureCard({ fixture, className }: FixtureCardProps) {
               </div>
             </div>
 
-            {/* Sentiment snippet */}
-            {topOutcome && (
+            {/* Show actual prediction pick - NOT market's top outcome */}
+            {primaryPick && (
               <div className="flex items-center gap-1.5 mt-3 text-xs text-muted-foreground">
                 <TrendingUp className="w-3 h-3" />
                 <span className="truncate">
-                  {topOutcome.name}: <span className="font-medium text-foreground/80">{Math.round(topOutcome.probability * 100)}%</span>
+                  {primaryPick.selection}
                 </span>
               </div>
             )}
