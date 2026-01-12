@@ -1,10 +1,11 @@
 "use client";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { CategoryBadge, ConfidenceIndicator } from "@/components/shared";
 import { MARKETS } from "@/config/markets";
 import type { Prediction, AIAnalysis, MarketSentiment } from "@/types";
-import { Target, Shield, AlertTriangle, Lightbulb, CheckCircle2, TrendingUp, TrendingDown } from "lucide-react";
+import { Target, Shield, AlertTriangle, Lightbulb, CheckCircle2, TrendingUp, TrendingDown, Cpu, BarChart3 } from "lucide-react";
 
 interface AnalysisCardProps {
   prediction: Prediction;
@@ -106,6 +107,20 @@ export function AnalysisCard({ prediction, analysis, sentiment }: AnalysisCardPr
             <CardTitle className="text-lg">Analysis & Prediction</CardTitle>
           </div>
           <CategoryBadge category={category} size="lg" />
+        </div>
+        {/* Analysis Mode Label - UI_UX_SPEC v1.2 */}
+        <div className="flex items-center gap-2 mt-2">
+          {sentiment?.available ? (
+            <>
+              <BarChart3 className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="text-xs text-muted-foreground">AI + Market-backed analysis</span>
+            </>
+          ) : (
+            <>
+              <Cpu className="w-3.5 h-3.5 text-blue-400" />
+              <span className="text-xs text-muted-foreground">AI-led analysis</span>
+            </>
+          )}
         </div>
       </CardHeader>
 

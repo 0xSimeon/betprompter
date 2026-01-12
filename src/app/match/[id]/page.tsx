@@ -69,13 +69,6 @@ export default async function MatchPage({ params }: MatchPageProps) {
           />
         </div>
 
-        {/* Limited data note - per UI_UX_SPEC v1.1 section 4 (one-time, no repetition) */}
-        {match.prediction && !match.sentiment?.available && (
-          <p className="text-xs text-muted-foreground text-center">
-            Some markets are unavailable due to limited pre-match liquidity. The engine recommendation remains valid using available signals.
-          </p>
-        )}
-
         {/* Other Market Tips - Full width below */}
         {match.prediction?.allMarkets && match.prediction.allMarkets.length > 0 && (
           <AllMarketsDisplay
