@@ -29,25 +29,39 @@ import { nowGMT1 } from "@/lib/date";
  */
 const BASE_MARKET_SCORES: Record<MarketType, number> = {
   MATCH_RESULT: 50,     // Expressive - clear position
-  DOUBLE_CHANCE: 42,    // Safe fallback (-3 from original)
-  OVER_1_5: 44,         // Safe fallback (-4 from original)
-  OVER_2_5: 50,         // Expressive - equal to ML (+4 from original)
+  DOUBLE_CHANCE: 48,    // Safe fallback - competitive with Draw (v1.6)
+  OVER_1_5: 46,         // Safe fallback - can compete when ML penalized (v1.6)
+  OVER_2_5: 50,         // Expressive - equal to ML
 };
 
 /**
- * Gemini penalty values per ENGINE_SPEC v1.1
- * - mild: -15
- * - strong: -35
- * - overconfidence + missingContext together: additional -10
+ * Context-aware Gemini penalty values per ENGINE_SPEC v1.4
+ * Penalties scale based on Groq's confidence level:
+ * - HIGH confidence picks get full penalties (they claim certainty)
+ * - MEDIUM confidence picks get moderate penalties
+ * - LOW confidence picks get soft penalties (already flagged as risky)
  */
-const GEMINI_PENALTIES = {
-  CAUTION_MILD: -15,
-  CAUTION_STRONG: -35,
-  COMBINED_FLAGS_BONUS: -10, // Additional when both overconfidence AND missingContext
+const GEMINI_PENALTIES_BY_CONFIDENCE = {
+  HIGH: {
+    CAUTION_MILD: -15,
+    CAUTION_STRONG: -30,
+    COMBINED_FLAGS: -10,
+  },
+  MEDIUM: {
+    CAUTION_MILD: -10,
+    CAUTION_STRONG: -20,
+    COMBINED_FLAGS: -5,
+  },
+  LOW: {
+    CAUTION_MILD: -5,
+    CAUTION_STRONG: -10,
+    COMBINED_FLAGS: 0,  // No stacking for already-risky picks
+  },
 } as const;
 
 /**
  * Polymarket signal bonuses/penalties per ENGINE_SPEC v1.1
+ * v1.3: Alignment bonus now requires minimum probability to prevent Draw bias
  */
 const POLYMARKET_SIGNALS = {
   VOLUME_BONUS: 10,         // +10 if volume >= threshold
@@ -55,6 +69,7 @@ const POLYMARKET_SIGNALS = {
   LOW_PAYOUT_PENALTY: -10,  // -10 if extremely low payout proxy (e.g. DC at ~1.04 implied)
   VOLUME_THRESHOLD: 1000,   // Minimum volume for bonus
   LOW_PAYOUT_THRESHOLD: 0.96, // 96%+ implied probability = low payout
+  ALIGNMENT_MIN_PROB: 0.35, // v1.3: Alignment bonus only if prob >= 35%
 } as const;
 
 /**
@@ -87,6 +102,7 @@ const CATEGORY_THRESHOLDS = {
 const USEFULNESS_CEILINGS = {
   OVER_1_5: 0.78,      // Cannot be PRIMARY if AI probability > 78%
   DOUBLE_CHANCE: 0.75, // Cannot be PRIMARY if AI probability > 75%
+  ML_THRESHOLD: 0.68,  // Only apply ceilings when ML favorite prob >= 68% (v1.6)
 } as const;
 
 /**
@@ -96,6 +112,15 @@ const USEFULNESS_CEILINGS = {
 const DRAW_SAFEGUARDS = {
   MIN_DRAW_PROBABILITY: 0.15,   // Draw cannot be PRIMARY if market prob < 15%
   MAX_FAVORITE_PROBABILITY: 0.65, // Draw cannot be PRIMARY if favorite > 65%
+} as const;
+
+/**
+ * ML low-probability safeguard per ENGINE_SPEC v1.6
+ * Penalize ML picks when probability is too low to justify the risk
+ */
+const ML_LOW_PROB_SAFEGUARD = {
+  THRESHOLD: 0.55,  // Apply penalty if ML prob < 55% (v1.6)
+  PENALTY: -8,      // Reduce score by 8 points
 } as const;
 
 /**
@@ -117,12 +142,12 @@ const DOMINANCE_OVERRIDE = {
 } as const;
 
 /**
- * Dominance score adjustments per ENGINE_SPEC v1.1
- * Bipolar: boost expressive markets, suppress ultra-safe markets
+ * Dominance score adjustments per ENGINE_SPEC v1.6
+ * Unipolar: boost expressive markets only, no penalty for safe markets
  */
 const DOMINANCE_ADJUSTMENTS = {
-  EXPRESSIVE_BOOST: 12,  // +12 for ML and Over 2.5
-  SAFE_PENALTY: -12,     // -12 for DC and Over 1.5
+  EXPRESSIVE_BOOST: 8,   // +8 for ML and Over 2.5 (was +12)
+  SAFE_PENALTY: 0,       // No penalty for DC and Over 1.5 (was -12)
 } as const;
 
 /**
@@ -176,21 +201,30 @@ interface MarketScore {
 
 /**
  * Check if market is blocked from being PRIMARY due to usefulness ceiling
+ * v1.6: Only apply ceilings when ML favorite probability >= 68%
+ * When ML is not dominant, high-prob DC/O1.5 are actually good picks
  */
 function isBlockedByUsefulnessCeiling(
   marketType: MarketType,
-  aiProbability: number
+  aiProbability: number,
+  favoriteProb: number = 0
 ): { blocked: boolean; reason: string | null } {
+  // v1.6: Only apply ceilings when ML is solid favorite (>=68%)
+  // When ML is risky (<68%), high-prob DC/O1.5 should be allowed
+  if (favoriteProb < USEFULNESS_CEILINGS.ML_THRESHOLD) {
+    return { blocked: false, reason: null };
+  }
+
   if (marketType === "OVER_1_5" && aiProbability > USEFULNESS_CEILINGS.OVER_1_5) {
     return {
       blocked: true,
-      reason: `Over 1.5 at ${Math.round(aiProbability * 100)}% is too safe for PRIMARY`,
+      reason: `Over 1.5 at ${Math.round(aiProbability * 100)}% is too safe for PRIMARY (ML at ${Math.round(favoriteProb * 100)}%)`,
     };
   }
   if (marketType === "DOUBLE_CHANCE" && aiProbability > USEFULNESS_CEILINGS.DOUBLE_CHANCE) {
     return {
       blocked: true,
-      reason: `Double Chance at ${Math.round(aiProbability * 100)}% is too safe for PRIMARY`,
+      reason: `Double Chance at ${Math.round(aiProbability * 100)}% is too safe for PRIMARY (ML at ${Math.round(favoriteProb * 100)}%)`,
     };
   }
   return { blocked: false, reason: null };
@@ -256,6 +290,10 @@ function calculateGroqConfidenceBonus(confidence: "HIGH" | "MEDIUM" | "LOW"): nu
  * +10 if volume >= threshold
  * +10 if probability aligns with Groq lean
  * -10 if market is extremely low payout proxy
+ *
+ * v1.3: Alignment bonus now requires minimum probability (35%) to prevent Draw bias
+ * Low-probability outcomes (like Draw at 20%) shouldn't get alignment bonuses
+ * just because they happen to match the AI's conservative estimate.
  */
 function calculatePolymarketSignal(
   volume: number,
@@ -271,9 +309,15 @@ function calculatePolymarketSignal(
   }
 
   // +10 if probability aligns with Groq lean (within 15% of each other)
+  // v1.3: Only apply if the outcome has meaningful probability (>= 35%)
+  // This prevents Draw from getting alignment bonuses when it's a low-probability outcome
   if (marketProbability !== null) {
     const alignment = Math.abs(aiProbability - marketProbability);
-    if (alignment <= 0.15) {
+    const hasMeaningfulProbability =
+      aiProbability >= POLYMARKET_SIGNALS.ALIGNMENT_MIN_PROB ||
+      marketProbability >= POLYMARKET_SIGNALS.ALIGNMENT_MIN_PROB;
+
+    if (alignment <= 0.15 && hasMeaningfulProbability) {
       signal += POLYMARKET_SIGNALS.ALIGNMENT_BONUS;
     }
   }
@@ -290,27 +334,32 @@ function calculatePolymarketSignal(
 }
 
 /**
- * Calculate Gemini penalty from verification flags per ENGINE_SPEC v1.1
- * - mild: -15
- * - strong: -35
- * - overconfidence + missingContext together: additional -10
+ * Calculate Gemini penalty from verification flags per ENGINE_SPEC v1.4
+ * Penalties now scale based on Groq's confidence level:
+ * - HIGH confidence picks get full penalties (they claim certainty)
+ * - MEDIUM confidence picks get moderate penalties
+ * - LOW confidence picks get soft penalties (already flagged as risky)
  */
-function calculateGeminiPenalty(verification: GeminiVerification): number {
+function calculateGeminiPenalty(
+  verification: GeminiVerification,
+  groqConfidence: "HIGH" | "MEDIUM" | "LOW"
+): number {
+  const penalties = GEMINI_PENALTIES_BY_CONFIDENCE[groqConfidence];
   let penalty = 0;
 
-  // Caution level penalty
+  // Caution level penalty (scaled by confidence)
   switch (verification.cautionLevel) {
     case "mild":
-      penalty += GEMINI_PENALTIES.CAUTION_MILD;
+      penalty += penalties.CAUTION_MILD;
       break;
     case "strong":
-      penalty += GEMINI_PENALTIES.CAUTION_STRONG;
+      penalty += penalties.CAUTION_STRONG;
       break;
   }
 
   // Additional penalty if BOTH overconfidence AND missingContext
   if (verification.overconfidence && verification.missingContext) {
-    penalty += GEMINI_PENALTIES.COMBINED_FLAGS_BONUS;
+    penalty += penalties.COMBINED_FLAGS;
   }
 
   return penalty;
@@ -407,10 +456,62 @@ function getMarketProbability(
 }
 
 /**
- * Score a single market per ENGINE_SPEC v1.1 formula:
- * finalScore = baseMarketScore + polymarketSignal + groqConfidence + geminiPenalty
+ * Probability bonus for higher-confidence selections (v1.3)
+ * Adds small tiebreaker bonus based on actual probability
+ * Range: 0-8 points based on probability (50%+ gets proportional bonus)
+ */
+function calculateProbabilityBonus(
+  aiProbability: number,
+  marketProbability: number | null
+): number {
+  // Use market probability if available (more reliable), otherwise AI
+  const prob = marketProbability ?? aiProbability;
+
+  // Only give bonus for probabilities above 40%
+  if (prob < 0.40) return 0;
+
+  // Scale: 40% = 0, 70% = 8 (linear scale)
+  // This gives higher-probability outcomes a tiebreaker advantage
+  return Math.min(8, Math.round((prob - 0.40) * (8 / 0.30)));
+}
+
+/**
+ * AI/Market divergence signal per ENGINE_SPEC v1.4
+ * Rewards AI for finding value edges, penalizes going against strong market consensus
+ * Returns 0 when no Polymarket data (neutral - no penalty for missing PM)
+ */
+function calculateDivergenceSignal(
+  aiProbability: number,
+  marketProbability: number | null,
+  groqConfidence: "HIGH" | "MEDIUM" | "LOW"
+): number {
+  // NO POLYMARKET DATA = no divergence signal (neutral, not penalized)
+  if (marketProbability === null) return 0;
+
+  const divergence = aiProbability - marketProbability; // Positive = AI more confident
+
+  // If AI sees VALUE (higher than market) and confidence is HIGH
+  // This rewards the AI for finding edges the market missed
+  if (divergence > 0.10 && groqConfidence === "HIGH") {
+    return 5; // Bonus for finding edge
+  }
+
+  // If AI much lower than market (AI sees risk market doesn't)
+  // Penalize going against strong market consensus
+  if (divergence < -0.15) {
+    return -5; // Penalty for going against strong market
+  }
+
+  return 0;
+}
+
+/**
+ * Score a single market per ENGINE_SPEC v1.4 formula:
+ * finalScore = base + polymarketSignal + groqConfidence + geminiPenalty + probabilityBonus + divergenceSignal
  *
  * v1.2: Added favoriteProb for Draw safeguard checks
+ * v1.3: Added probability bonus as tiebreaker for higher-probability outcomes
+ * v1.4: Added divergence signal for AI/Market alignment, context-aware Gemini penalties
  */
 function scoreMarket(
   marketType: MarketType,
@@ -426,7 +527,7 @@ function scoreMarket(
   // Base score from ENGINE_SPEC v1.1 (fixed per market type)
   const baseScore = BASE_MARKET_SCORES[marketType];
 
-  // Polymarket signal
+  // Polymarket signal (+10 volume, +10 alignment, -10 low payout)
   const polymarketSignal = calculatePolymarketSignal(
     volume,
     marketProbability,
@@ -437,11 +538,28 @@ function scoreMarket(
   // Groq confidence bonus (max +20)
   const groqConfidenceBonus = calculateGroqConfidenceBonus(groqConfidence);
 
-  // Final score per ENGINE_SPEC v1.1
-  const finalScore = baseScore + polymarketSignal + groqConfidenceBonus + geminiPenalty;
+  // v1.3: Probability bonus for tiebreaking (max +8)
+  const probabilityBonus = calculateProbabilityBonus(aiProbability, marketProbability);
 
-  // Check usefulness ceiling constraint
-  const usefulnessCheck = isBlockedByUsefulnessCeiling(marketType, aiProbability);
+  // v1.4: Divergence signal - rewards AI for finding edges, penalizes going against market
+  // Returns 0 when no PM data (no penalty for missing Polymarket)
+  const divergenceSignal = calculateDivergenceSignal(aiProbability, marketProbability, groqConfidence);
+
+  // v1.6: ML low-probability penalty - penalize ML picks when probability is too low
+  // Don't apply to Draw (already has separate safeguards)
+  let mlLowProbPenalty = 0;
+  if (marketType === "MATCH_RESULT" && aiProbability < ML_LOW_PROB_SAFEGUARD.THRESHOLD) {
+    const isDrawSelection = selection.toLowerCase().includes("draw");
+    if (!isDrawSelection) {
+      mlLowProbPenalty = ML_LOW_PROB_SAFEGUARD.PENALTY;
+    }
+  }
+
+  // Final score per ENGINE_SPEC v1.6
+  const finalScore = baseScore + polymarketSignal + groqConfidenceBonus + geminiPenalty + probabilityBonus + divergenceSignal + mlLowProbPenalty;
+
+  // Check usefulness ceiling constraint (v1.6: conditional on ML favorite prob)
+  const usefulnessCheck = isBlockedByUsefulnessCeiling(marketType, aiProbability, favoriteProb);
 
   // Check Draw safeguard constraint (v1.2)
   const drawCheck = isDrawBlockedAsPrimary(selection, aiProbability, favoriteProb);
@@ -582,16 +700,33 @@ function shouldBlockBankerForDivergence(
  * - NO BET: < 40
  *
  * v1.2: Added confidence sanity check - cap at VALUE if AI/Market diverge > 25% AND Gemini caution
+ * v1.4: MATCH_RESULT Draw capped at VALUE (never BANKER) to prevent Draw drift
  */
 function determineCategory(
   finalScore: number,
   geminiVerification: GeminiVerification,
   aiProbability: number = 0,
-  marketProbability: number | null = null
+  marketProbability: number | null = null,
+  selection?: string,
+  marketType?: string
 ): PredictionCategory {
   // NO BET if below minimum threshold
   if (finalScore < CATEGORY_THRESHOLDS.NO_BET) {
     return "RISKY"; // We use RISKY to represent NO_BET in our type system
+  }
+
+  // v1.4: MATCH_RESULT Draw cannot be BANKER - max category is VALUE
+  // Scoped to MATCH_RESULT only to avoid affecting goal markets or future markets
+  const isMatchResultDraw =
+    marketType === "MATCH_RESULT" &&
+    selection?.toLowerCase().includes("draw");
+
+  if (isMatchResultDraw) {
+    // Draw can be VALUE at best, never BANKER
+    if (finalScore >= CATEGORY_THRESHOLDS.VALUE_MIN) {
+      return "VALUE";
+    }
+    return "RISKY";
   }
 
   // v1.2: Confidence sanity check - block BANKER if divergence is too high
@@ -632,8 +767,9 @@ export function scoreAllMarkets(
   sentiment: MarketSentiment | null,
   analysis: AIAnalysis
 ): MarketScore[] {
-  const geminiPenalty = calculateGeminiPenalty(analysis.geminiVerification);
   const groqConfidence = analysis.groqAnalysis.confidence;
+  // Context-aware penalties: scale based on Groq's confidence level
+  const geminiPenalty = calculateGeminiPenalty(analysis.geminiVerification, groqConfidence);
   const probs = analysis.groqAnalysis.probabilities;
   const scores: MarketScore[] = [];
 
@@ -642,7 +778,12 @@ export function scoreAllMarkets(
   }
 
   // Calculate favorite probability for Draw safeguard (v1.2)
-  const favoriteProb = Math.max(probs.homeWin, probs.awayWin);
+  // Use average of AI and market probability; fallback to AI only if no market data
+  const homeMarketProb = getMarketProbability(sentiment, "MATCH_RESULT", "Home Win").probability;
+  const awayMarketProb = getMarketProbability(sentiment, "MATCH_RESULT", "Away Win").probability;
+  const homeProb = homeMarketProb !== null ? (probs.homeWin + homeMarketProb) / 2 : probs.homeWin;
+  const awayProb = awayMarketProb !== null ? (probs.awayWin + awayMarketProb) / 2 : probs.awayWin;
+  const favoriteProb = Math.max(homeProb, awayProb);
 
   // Helper to add a market score
   const addMarketScore = (
@@ -715,7 +856,7 @@ function buildMarketSelection(score: MarketScore): MarketSelection {
  * Boost applied to expressive markets when safe markets are blocked
  * This ensures ML and O2.5 are promoted when DC/O1.5 hit usefulness ceilings
  */
-const EXPRESSIVE_BOOST_ON_SAFE_BLOCK = 6;
+const EXPRESSIVE_BOOST_ON_SAFE_BLOCK = 4; // Was 6 - reduced per v1.6
 
 /**
  * Select PRIMARY market applying constraints
@@ -723,25 +864,41 @@ const EXPRESSIVE_BOOST_ON_SAFE_BLOCK = 6;
  * v1.2: Boosts expressive markets (ML, O2.5) when safe markets (DC, O1.5) are blocked
  */
 function selectPrimaryMarket(scores: MarketScore[]): MarketScore | null {
+  // Log top 5 scores for debugging
+  console.log("[Engine] Top scores:");
+  scores.slice(0, 5).forEach((s) => {
+    console.log(`  ${s.market} ${s.selection}: ${s.finalScore} (base=${s.baseScore}, pm=${s.polymarketSignal}, ai=${s.groqConfidenceBonus}, gem=${s.geminiPenalty}, blocked=${s.blockedAsPrimary})`);
+  });
+
   // Check if any safe market was blocked by usefulness ceiling
   const safeMarketsBlocked = scores.some(
     (s) => s.blockedAsPrimary && (s.market === "DOUBLE_CHANCE" || s.market === "OVER_1_5")
   );
 
   // If safe markets were blocked, create adjusted scores with expressive boost
+  // v1.4: Exclude MATCH_RESULT Draw from boost (mirrors dominance override logic)
   let adjustedScores = scores;
   if (safeMarketsBlocked) {
+    console.log("[Engine] Safe markets blocked, boosting expressive markets (excluding Draw)");
     adjustedScores = scores.map((s) => {
-      if (s.market === "MATCH_RESULT" || s.market === "OVER_2_5") {
+      const isMatchResultDraw = s.market === "MATCH_RESULT" && s.selection.toLowerCase().includes("draw");
+      if ((s.market === "MATCH_RESULT" && !isMatchResultDraw) || s.market === "OVER_2_5") {
         return { ...s, finalScore: s.finalScore + EXPRESSIVE_BOOST_ON_SAFE_BLOCK };
       }
       return s;
-    }).sort((a, b) => b.finalScore - a.finalScore);
+    }).sort((a, b) => {
+      // v1.4: Stable tiebreaker - demote MATCH_RESULT Draw on equal scores
+      if (b.finalScore !== a.finalScore) return b.finalScore - a.finalScore;
+      const aIsMatchResultDraw = a.market === "MATCH_RESULT" && a.selection.toLowerCase().includes("draw") ? 1 : 0;
+      const bIsMatchResultDraw = b.market === "MATCH_RESULT" && b.selection.toLowerCase().includes("draw") ? 1 : 0;
+      return aIsMatchResultDraw - bIsMatchResultDraw;
+    });
   }
 
   // Find highest scoring market that isn't blocked
   for (const score of adjustedScores) {
     if (!score.blockedAsPrimary) {
+      console.log(`[Engine] Selected PRIMARY: ${score.market} ${score.selection} (score=${score.finalScore})`);
       return score;
     }
   }
@@ -893,12 +1050,14 @@ export function generateEnginePrediction(
     };
   }
 
-  // Determine category per ENGINE_SPEC v1.1 + v1.2 sanity check
+  // Determine category per ENGINE_SPEC v1.1 + v1.2 sanity check + v1.4 Draw cap
   const category = determineCategory(
     primary.finalScore,
     analysis.geminiVerification,
     primary.aiProbability,
-    primary.marketProbability
+    primary.marketProbability,
+    primary.selection,
+    primary.market
   );
 
   // Select SECONDARY (respecting correlation constraints)
