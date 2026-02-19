@@ -10,10 +10,10 @@ You must follow the specifications exactly and maintain progress logs so work ca
 
 Before writing, modifying, or suggesting any code, you MUST read and obey **all files** in `/specs`:
 
-- /specs/ENGINE_SPEC.md
-- /specs/DATA_CONTRACT.md
-- /specs/IMPLEMENTATION_RULES.md
-- /specs/DEVOPS_WORKFLOW.md
+- /specs/active/ENGINE_SPEC.md
+- /specs/active/DATA_CONTRACT.md
+- /specs/active/IMPLEMENTATION_RULES.md
+- /specs/active/DEVOPS_WORKFLOW.md
 - /specs/TESTING_PLAYBOOK.md
 - /specs/DEV_LOG.md
 

@@ -167,6 +167,7 @@ Only render an “Other Markets” card IF:
   - Do NOT render the market card
 
 ### 3.3 Removal Rules
+
 - Remove:
   - Empty “Market —” placeholders
   - Duplicate market cards
@@ -224,3 +225,56 @@ Rules:
 - Homepage default view:
   - Today + next 48–72 hours
 - Full 2-week window is backend-only and not user-facing by default
+
+
+# UI_UX_SPEC v1.2
+
+## Data Availability & Analysis Integrity (CRITICAL)
+
+### Core Rule
+Polymarket data is an optional enhancement, not a requirement.
+
+Absence of Polymarket data MUST NOT:
+- Trigger “limited data” states
+- Suppress “The Angle”
+- Downgrade confidence labels
+- Change tone or visual priority
+- Suggest the system is incomplete or broken
+
+---
+
+### Analysis Modes (Informational Only)
+
+Each match must display exactly one analysis mode label:
+
+- **AI-led analysis**
+  - Used when Polymarket data is unavailable
+- **AI + Market-backed analysis**
+  - Used when Polymarket data is available
+
+These labels are descriptive only and MUST NOT affect scoring, categories, or visibility.
+
+---
+
+
+### Messaging Rules (Strict)
+
+Disallowed phrases:
+- “Limited data”
+
+- “Unable to generate analysis”
+- “Insufficient data”
+- “Incomplete analysis”
+
+Allowed phrasing:
+- “Market sentiment unavailable”
+- “Analysis based on AI signals”
+- “Market data not available for this fixture”
+
+---
+
+### The Angle (Non-Negotiable)
+
+- “The Angle” MUST render whenever a prediction exists
+- It must NEVER reference missing market data as a failure
+- Narrative tone must remain confident and complete
