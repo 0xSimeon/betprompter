@@ -4,3 +4,4 @@ export * from "./ai-analysis";
 export * from "./match-selection";
 export * from "./prediction";
 export * from "./engine";
+export * from "./settlement";
