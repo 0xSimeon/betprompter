@@ -21,6 +21,15 @@ import crypto from "crypto";
 const GROQ_API_KEY = process.env.GROQ_API_KEY || "";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 
+// Default probabilities when AI output is invalid or missing
+const DEFAULT_PROBABILITIES = {
+  homeWin: 0.40,
+  draw: 0.25,
+  awayWin: 0.35,
+  over15: 0.55,
+  over25: 0.50,
+};
+
 /**
  * Generate a hash of the inputs for change detection
  */
@@ -192,7 +201,66 @@ Respond in this EXACT JSON format:
   "cautionLevel": "none" | "mild" | "strong"
 }
 
-Be skeptical. If confidence seems unjustified, flag it.`;
+Be measured. Only flag issues that would MATERIALLY affect the bet:
+- overconfidence: TRUE only if HIGH confidence is claimed without strong supporting evidence
+- missingContext: TRUE only if a KEY factor is missing (injuries to starters, major form collapse, critical H2H pattern)
+- cautionLevel: "strong" is reserved for genuinely risky situations, not minor omissions
+
+If the analysis is reasonable and well-supported, return cautionLevel: "none".`;
+}
+
+/**
+ * Validate and normalize AI probability outputs
+ * Ensures probabilities sum to ~1.0 and are within reasonable ranges
+ */
+function validateAndNormalizeProbabilities(
+  probs: GroqAnalysis["probabilities"] | undefined
+): NonNullable<GroqAnalysis["probabilities"]> {
+  if (!probs) {
+    console.warn("[AI] No probabilities provided, using defaults");
+    return { ...DEFAULT_PROBABILITIES };
+  }
+
+  // Validate all required fields exist
+  if (
+    typeof probs.homeWin !== "number" ||
+    typeof probs.draw !== "number" ||
+    typeof probs.awayWin !== "number"
+  ) {
+    console.warn("[AI] Missing probability fields, using defaults");
+    return { ...DEFAULT_PROBABILITIES };
+  }
+
+  const sum = probs.homeWin + probs.draw + probs.awayWin;
+
+  // Check if probabilities sum to ~1.0 (allow 0.95-1.05 tolerance)
+  let normalized = { ...probs };
+  if (sum < 0.95 || sum > 1.05) {
+    console.warn(`[AI] Probabilities sum to ${sum.toFixed(3)}, normalizing to 1.0`);
+    const factor = 1 / sum;
+    normalized = {
+      homeWin: probs.homeWin * factor,
+      draw: probs.draw * factor,
+      awayWin: probs.awayWin * factor,
+      over15: probs.over15 ?? DEFAULT_PROBABILITIES.over15,
+      over25: probs.over25 ?? DEFAULT_PROBABILITIES.over25,
+    };
+  }
+
+  // Clamp individual probabilities to valid range [0, 1]
+  normalized.homeWin = Math.max(0, Math.min(1, normalized.homeWin));
+  normalized.draw = Math.max(0, Math.min(1, normalized.draw));
+  normalized.awayWin = Math.max(0, Math.min(1, normalized.awayWin));
+  normalized.over15 = Math.max(0, Math.min(1, normalized.over15 ?? DEFAULT_PROBABILITIES.over15));
+  normalized.over25 = Math.max(0, Math.min(1, normalized.over25 ?? DEFAULT_PROBABILITIES.over25));
+
+  // Warn if any probability is extreme (>85%)
+  const maxProb = Math.max(normalized.homeWin, normalized.draw, normalized.awayWin);
+  if (maxProb > 0.85) {
+    console.warn(`[AI] Extreme probability detected (${(maxProb * 100).toFixed(1)}%), may be overconfident`);
+  }
+
+  return normalized;
 }
 
 /**
@@ -258,6 +326,9 @@ async function callGroq(prompt: string): Promise<GroqAnalysis> {
 
     const parsed = JSON.parse(content);
 
+    // Validate and normalize probabilities
+    const validatedProbabilities = validateAndNormalizeProbabilities(parsed.probabilities);
+
     return {
       narrative: parsed.narrative || defaultAnalysis.narrative,
       keyFactors: parsed.keyFactors || [],
@@ -266,7 +337,7 @@ async function callGroq(prompt: string): Promise<GroqAnalysis> {
       suggestedMarket: parsed.suggestedMarket as MarketType | null,
       suggestedOutcome: parsed.suggestedOutcome || null,
       concerns: parsed.concerns || [],
-      probabilities: parsed.probabilities || undefined,
+      probabilities: validatedProbabilities,
     };
   } catch (error) {
     console.error("Groq API call failed:", error);
@@ -279,10 +350,11 @@ async function callGroq(prompt: string): Promise<GroqAnalysis> {
  * Per ENGINE_SPEC: Gemini returns only overconfidence, missingContext, cautionLevel
  */
 async function callGemini(prompt: string): Promise<GeminiVerification> {
+  // Safe defaults when Gemini unavailable - assume incomplete until verified
   const defaultVerification: GeminiVerification = {
-    overconfidence: false,
-    missingContext: false,
-    cautionLevel: "none",
+    overconfidence: false,     // Don't assume overconfident
+    missingContext: true,      // Assume context MIGHT be missing (safer)
+    cautionLevel: "mild",      // Apply mild caution when unverified
   };
 
   if (!GEMINI_API_KEY) {
